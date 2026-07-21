@@ -244,6 +244,13 @@ do
   eq("blink inside {{ }} offers symbols, no snippets", { has_fn, has_snippet }, { true, false })
 end
 
+eq("blink mask secretish keys", {
+  blink.masked(".github.token"),
+  blink.masked(".age.recipients"),
+  blink.masked(".chezmoi.hostname"),
+  blink.masked(".work.api_url"),
+}, { true, false, false, true })
+
 eq(
   "blink flatten",
   blink.flatten({ chezmoi = { hostname = "k", os = "darwin" }, roles = { "base" } }),

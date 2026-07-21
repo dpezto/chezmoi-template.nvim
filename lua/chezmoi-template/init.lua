@@ -22,6 +22,14 @@ M.config = {
   redirect = false,
   -- surface template errors (via `chezmoi execute-template`) as diagnostics on write
   diagnostics = { enabled = true },
+  -- blink.cmp source behavior
+  completion = {
+    -- hide values of data keys matching these lua patterns in completion docs
+    mask = { "secret", "token", "passw", "key", "api" },
+  },
+  -- :ChezmoiPick backend: "snacks" | "telescope" | "fzf-lua" | "mini" | "select";
+  -- nil = auto-detect among loaded pickers, falling back to vim.ui.select
+  picker = nil,
   -- transparent decrypt/encrypt of chezmoi-managed encrypted files (*.age, *.asc)
   encryption = {
     enabled = false,
@@ -78,6 +86,19 @@ function M.setup(opts)
   if M.config.diagnostics.enabled then
     require("chezmoi-template.diagnostics").setup()
   end
+
+  -- Warm the `chezmoi data` cache off the first template's back, so the first
+  -- completion doesn't pay the spawn. Deferred: FileType handlers finish first.
+  vim.api.nvim_create_autocmd("FileType", {
+    group = "chezmoi-template.tmpl",
+    pattern = "gotmpl",
+    once = true,
+    callback = function()
+      vim.defer_fn(function()
+        require("chezmoi-template.resolve").data()
+      end, 100)
+    end,
+  })
 end
 
 return M

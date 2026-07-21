@@ -199,8 +199,10 @@ function M.setup()
         return
       end
 
+      -- Never persist decrypted content: no swap, no undo history on disk
       vim.bo[ctx.buf].binary = true
       vim.bo[ctx.buf].swapfile = false
+      vim.bo[ctx.buf].undofile = false
 
       -- Buffer-local: other encrypted files won't see these events
       vim.api.nvim_create_autocmd("BufReadPost", {

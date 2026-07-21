@@ -17,15 +17,16 @@ local KIND = { Function = 3, Variable = 6, Keyword = 14, Snippet = 15 }
 local SNIPPET_FORMAT = 2 -- InsertTextFormat.Snippet
 
 -- kind_icon by the completed thing, not just its LSP kind: data keys show
--- their value's type
+-- their value's type. kind_hl must accompany a custom kind_icon or blink
+-- renders the glyph unhighlighted (flat foreground).
 local ICON = {
-  string = "󰉿",
-  number = "󰎠",
-  boolean = "󰨙",
-  table = "󰅩",
-  func = "󰊕",
-  keyword = "󰌋",
-  snippet = "󱄽",
+  string = { "󰉿", "@string" },
+  number = { "󰎠", "@number" },
+  boolean = { "󰨙", "@boolean" },
+  table = { "󰅩", "@property" },
+  func = { "󰊕", "@function" },
+  keyword = { "󰌋", "@keyword" },
+  snippet = { "󱄽", "@constructor" },
 }
 
 local KEYWORDS = {
@@ -103,7 +104,28 @@ function M.flatten(tbl, prefix, out)
   return out
 end
 
+-- Should this data key's value be hidden in completion docs?
+-- Matches config.completion.mask lua patterns against the lowercased path.
+function M.masked(path)
+  local patterns = require("chezmoi-template").config.completion.mask
+  local lower = path:lower()
+  for _, pat in ipairs(patterns) do
+    if lower:match(pat) then
+      return true
+    end
+  end
+  return false
+end
+
 local action_cache, block_cache
+
+local function item(label, icon_spec, extra)
+  local it = { label = label, insertText = label, kind_icon = icon_spec[1], kind_hl = icon_spec[2] }
+  for k, v in pairs(extra) do
+    it[k] = v
+  end
+  return it
+end
 
 local function action_items()
   if action_cache then
@@ -113,24 +135,26 @@ local function action_items()
   local data = require("chezmoi-template.resolve").data()
   if data then
     for _, e in ipairs(M.flatten(data)) do
-      local value = vim.inspect(e.value)
-      if #value > 200 then
-        value = value:sub(1, 200) .. "…"
+      local value
+      if M.masked(e.path) then
+        value = "•••••"
+      else
+        value = vim.inspect(e.value)
+        if #value > 200 then
+          value = value:sub(1, 200) .. "…"
+        end
       end
-      action_cache[#action_cache + 1] = {
-        label = e.path,
+      action_cache[#action_cache + 1] = item(e.path, ICON[type(e.value)] or ICON.table, {
         kind = KIND.Variable,
-        kind_icon = ICON[type(e.value)] or ICON.table,
-        insertText = e.path,
         documentation = { kind = "markdown", value = "```lua\n" .. value .. "\n```" },
-      }
+      })
     end
   end
   for _, f in ipairs(FUNCTIONS) do
-    action_cache[#action_cache + 1] = { label = f, kind = KIND.Function, kind_icon = ICON.func, insertText = f }
+    action_cache[#action_cache + 1] = item(f, ICON.func, { kind = KIND.Function })
   end
   for _, k in ipairs(KEYWORDS) do
-    action_cache[#action_cache + 1] = { label = k, kind = KIND.Keyword, kind_icon = ICON.keyword, insertText = k }
+    action_cache[#action_cache + 1] = item(k, ICON.keyword, { kind = KIND.Keyword })
   end
   return action_cache
 end
@@ -141,17 +165,15 @@ local function block_items()
   end
   block_cache = {}
   for _, b in ipairs(BLOCKS) do
-    block_cache[#block_cache + 1] = {
-      label = b.label,
+    block_cache[#block_cache + 1] = item(b.label, ICON.snippet, {
       kind = KIND.Snippet,
-      kind_icon = ICON.snippet,
       insertText = b.body,
       insertTextFormat = SNIPPET_FORMAT,
       documentation = {
         kind = "markdown",
         value = "```gotmpl\n" .. b.body:gsub("%${%d+:?([^}]*)}", "%1"):gsub("%$%d", "") .. "\n```",
       },
-    }
+    })
   end
   return block_cache
 end
