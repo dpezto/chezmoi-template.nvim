@@ -18,6 +18,10 @@ Most chezmoi integrations wrap the `chezmoi edit` CLI: temporary buffers, watche
 - **Target-aware icons** ([mini.icons](https://github.com/nvim-mini/mini.icons)). `private_dot_config/ghostty/config.tmpl` shows the ghostty icon, not a generic template glyph. Any combination of chezmoi source-state attributes (`private_`, `encrypted_`, `exact_`, `dot_`, `.tmpl`, `.age`, …) resolves to the deployed name.
 - **Transparent encryption** (opt-in). chezmoi-managed `*.age` files decrypt on open and re-encrypt on save via `chezmoi decrypt` / `chezmoi encrypt` — whatever your chezmoi config uses (age, rage, builtin age, even gpg) just works. `encrypted_*.tmpl.age` still gets full template + target highlighting.
 - **`%` matching for template delimiters** ([vim-matchup](https://github.com/andymass/vim-matchup)). `{{ if }}` ⇄ `{{ else }}` ⇄ `{{ end }}`, including `{{-` trim markers.
+- **Live template preview.** `:ChezmoiPreview` renders the buffer through `chezmoi execute-template` into a split typed as the target filetype, re-rendered on every write.
+- **Template diagnostics.** Errors from `chezmoi execute-template` surface as `vim.diagnostic` entries on write — template typos stop being invisible until apply fails.
+- **Commands.** `:ChezmoiApply` (buffer target or `!` for all, optional apply-on-save), `:ChezmoiDiff`, `:ChezmoiTarget`, `:ChezmoiSource` (jump from a deployed file to its source; opt-in automatic redirect), `:ChezmoiPreview`.
+- **Completion** ([blink.cmp](https://github.com/Saghen/blink.cmp)). Template data keys from `chezmoi data` (with value previews), template/sprig/chezmoi functions, and Go template keywords — only inside `{{ … }}`.
 
 Everything degrades gracefully: without the `chezmoi` binary you keep plain gotmpl highlighting and nothing errors.
 
@@ -41,6 +45,8 @@ lazy.nvim:
 }
 ```
 
+The plugin bootstraps itself with defaults — `setup()`/`opts` is only needed to change options. With other plugin managers, install and optionally set `vim.g.chezmoi_template = { ... }` before it loads.
+
 ## Configuration
 
 Defaults:
@@ -54,6 +60,13 @@ require("chezmoi-template").setup({
     indent_directives = true,  -- depth-pad column-0 `{{-` directive blocks
   },
   icons  = { enabled = true }, -- mini.icons resolution (no-op if absent)
+  commands = { enabled = true },
+  apply = {
+    on_save = false,           -- chezmoi apply <target> after writing a source file
+    notify = true,
+  },
+  redirect = false,            -- opening a deployed managed file jumps to its source
+  diagnostics = { enabled = true },
   age = {
     enabled = false,           -- opt-in
     engine = "chezmoi",        -- "chezmoi" (default) | "tool"
@@ -129,6 +142,21 @@ Two engines:
   },
   ```
 
+## Completion
+
+Register the blink.cmp source in your blink opts:
+
+```lua
+sources = {
+  default = { "chezmoi", "lsp", "path", "buffer" },
+  providers = {
+    chezmoi = { name = "chezmoi", module = "chezmoi-template.blink" },
+  },
+}
+```
+
+It only activates inside `{{ … }}` in gotmpl buffers, so it stays out of the way of the target language's own completion. Note: templates using secret-manager functions (`onepassword`, `vault`, …) may make `:ChezmoiPreview`/diagnostics slow or fail without auth — those calls run whatever your template runs.
+
 ## vs. chezmoi.nvim / chezmoi.vim / the LazyVim extra
 
 | | chezmoi.nvim + chezmoi.vim | chezmoi-template.nvim |
@@ -138,9 +166,10 @@ Two engines:
 | Formatting | — | target-filetype formatting through templates |
 | Icons | static per-extension glyphs | full source-name → target resolution |
 | age files | — | transparent decrypt/encrypt (opt-in) |
-| Picker / apply-on-save | yes | no — bring your own picker; `chezmoi apply` when you choose |
-
-They compose: keep the LazyVim `util.chezmoi` extra for its picker and add this plugin for everything else.
+| Preview / diagnostics | — | `:ChezmoiPreview`, template errors as diagnostics |
+| Completion | — | data keys + template functions (blink.cmp) |
+| Apply | apply-on-save via `chezmoi edit --watch` | `:ChezmoiApply`, opt-in apply-on-save |
+| Picker | telescope/fzf/snacks picker | bring your own (composes with the extra's) |
 
 ## Health
 

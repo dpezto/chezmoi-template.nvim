@@ -127,6 +127,58 @@ function M.target_ft(target)
   end
 end
 
+-- Absolute target paths of all managed files, cached after one
+-- `chezmoi managed` call (single spawn; O(1) lookups afterwards).
+local managed_cache
+
+function M.managed_set()
+  if managed_cache then
+    return managed_cache
+  end
+  managed_cache = {}
+  if M.has_chezmoi() then
+    local ret = vim.system(
+      { "chezmoi", "managed", "--path-style", "absolute", "--include", "files" },
+      { text = true }
+    ):wait()
+    if ret.code == 0 then
+      for line in ret.stdout:gmatch("[^\n]+") do
+        managed_cache[vim.fs.normalize(line)] = true
+      end
+    end
+  end
+  return managed_cache
+end
+
+-- Render template text through `chezmoi execute-template` (async).
+-- cb receives the vim.system result ({code, stdout, stderr}).
+function M.execute_template(text, cb)
+  if not M.has_chezmoi() then
+    return cb({ code = 1, stdout = "", stderr = "chezmoi executable not found" })
+  end
+  vim.system({ "chezmoi", "execute-template" }, { stdin = text, text = true, timeout = 10000 }, cb)
+end
+
+-- Template data (`chezmoi data`), cached per session.
+local data_cache
+
+function M.data()
+  if data_cache ~= nil then
+    return data_cache or nil
+  end
+  data_cache = false
+  if M.has_chezmoi() then
+    local ret = vim.system({ "chezmoi", "data", "--format", "json" }, { text = true }):wait()
+    if ret.code == 0 then
+      local ok, decoded = pcall(vim.json.decode, ret.stdout)
+      if ok and type(decoded) == "table" then
+        data_cache = decoded
+      end
+    end
+  end
+  return data_cache or nil
+end
+
 -- Record the target filetype/language on the buffer for the inject-chezmoi!
 -- directive and the conform formatter to read.
 function M.seed(buf, ft)

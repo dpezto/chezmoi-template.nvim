@@ -1,0 +1,149 @@
+*chezmoi-template.txt*  Native chezmoi source editing for Neovim
+
+Author:  Dai López <https://github.com/dpezto>
+License: MIT
+
+==============================================================================
+CONTENTS                                            *chezmoi-template-contents*
+
+  1. Introduction ......................... |chezmoi-template-introduction|
+  2. Setup ................................ |chezmoi-template-setup|
+  3. Options .............................. |chezmoi-template-options|
+  4. Commands ............................. |chezmoi-template-commands|
+  5. Completion ........................... |chezmoi-template-completion|
+  6. Health ............................... |chezmoi-template-health|
+
+==============================================================================
+1. INTRODUCTION                                 *chezmoi-template-introduction*
+
+chezmoi-template.nvim makes Neovim understand chezmoi (https://chezmoi.io)
+source files, so you edit them natively instead of going through
+`chezmoi edit`:
+
+- *.tmpl buffers are 'filetype' gotmpl with the deployed target language
+  treesitter-injected (a dot_zshrc.tmpl highlights as Go template + zsh).
+- A conform.nvim formatter formats templates with the TARGET filetype's
+  formatter by masking Go-template spans and restoring them afterwards.
+- mini.icons lookups resolve source names (private_dot_config/...) to their
+  deployed targets.
+- Optional transparent decrypt/encrypt of chezmoi-managed *.age files.
+- Template errors surface as |vim.diagnostic| entries on write.
+- User commands for apply/diff/preview/source-jumping.
+
+Everything degrades gracefully when the `chezmoi` binary is missing.
+
+==============================================================================
+2. SETUP                                               *chezmoi-template-setup*
+
+The plugin bootstraps itself with defaults; a setup() call is only needed to
+change options. With lazy.nvim: >lua
+
+  {
+    "dpezto/chezmoi-template.nvim",
+    lazy = false, -- autocmds must exist before the first file opens
+    opts = {},
+  }
+<
+Without a plugin spec, options can also be set via >lua
+
+  vim.g.chezmoi_template = { age = { enabled = true } }
+<
+before the plugin loads.
+
+==============================================================================
+3. OPTIONS                                           *chezmoi-template-options*
+
+Defaults: >lua
+
+  require("chezmoi-template").setup({
+    source_dir = nil,            -- nil = auto via `chezmoi source-path`
+    inject = { enabled = true }, -- treesitter target-language injection
+    format = {
+      enabled = true,            -- conform formatter registration
+      indent_directives = true,  -- depth-pad column-0 {{- directive blocks
+    },
+    icons = { enabled = true },  -- mini.icons resolution
+    commands = { enabled = true },
+    apply = {
+      on_save = false,           -- chezmoi apply <target> after writing
+      notify = true,             -- notify on successful applies
+    },
+    redirect = false,            -- deployed file open -> jump to source
+    diagnostics = { enabled = true },
+    age = {
+      enabled = false,
+      engine = "chezmoi",        -- "chezmoi" | "tool"
+      tool = nil,                -- engine="tool": nil = chezmoi's age.command
+      identity = nil,            -- engine="tool": path or function
+      recipients = nil,          -- engine="tool": list/string or function
+      exclude = {},              -- lua patterns of *.age paths to skip
+    },
+  })
+<
+                                            *chezmoi-template-indent-directives*
+format.indent_directives rewrites the interior padding of column-0 `{{-`
+whole-line directives so template nesting depth reads as indentation
+(1 space + 2 per level): >
+
+  {{- range $name, $spec := .packages.apps }}
+  {{-   $roles := get $spec "role" }}
+  {{-   if $ok }}
+  {{-     $via := get $spec "via" }}
+  {{-   end }}
+  {{- end }}
+<
+Directives with leading indentation (embedded in code layout) keep their
+single space.
+
+                                                  *chezmoi-template-age-engines*
+age.engine = "chezmoi" delegates to `chezmoi decrypt` / `chezmoi encrypt`:
+identities, recipients, tool choice (age/rage/builtin, even gpg) come from
+chezmoi's own encryption config. "tool" invokes an age-compatible binary
+directly, configured by age.tool/identity/recipients (each falls back to
+chezmoi's config).
+
+==============================================================================
+4. COMMANDS                                         *chezmoi-template-commands*
+
+                                                                *:ChezmoiApply*
+:ChezmoiApply         Apply the current buffer's deploy target.
+:ChezmoiApply!        Apply all targets.
+
+                                                                 *:ChezmoiDiff*
+:ChezmoiDiff          Diff for the current buffer's target in a split; the
+                      whole state when the buffer is not chezmoi-managed.
+
+                                                               *:ChezmoiTarget*
+:ChezmoiTarget        Echo the current buffer's deploy target path.
+:ChezmoiTarget!       Open the deployed file.
+
+                                                               *:ChezmoiSource*
+:ChezmoiSource        From a deployed managed file, jump to its chezmoi
+                      source. (Set redirect = true to do this automatically.)
+
+                                                              *:ChezmoiPreview*
+:ChezmoiPreview       Toggle a vertical split with the rendered template
+                      (`chezmoi execute-template`), typed as the target
+                      filetype and re-rendered on every write.
+
+==============================================================================
+5. COMPLETION                                     *chezmoi-template-completion*
+
+A blink.cmp source completes template data keys (from `chezmoi data`, with
+value previews), template/sprig/chezmoi functions, and Go template keywords —
+only inside {{ … }} in gotmpl buffers. Register it in blink.cmp opts: >lua
+
+  sources = {
+    default = { "chezmoi", "lsp", "path", "buffer" },
+    providers = {
+      chezmoi = { name = "chezmoi", module = "chezmoi-template.blink" },
+    },
+  }
+<
+==============================================================================
+6. HEALTH                                             *chezmoi-template-health*
+
+`:checkhealth chezmoi-template` verifies the chezmoi binary, the gotmpl
+treesitter parser, conform.nvim, and the configured encryption engine.
+
+vim:tw=78:ts=8:noet:ft=help:norl:

@@ -173,6 +173,47 @@ run_case("multi-line span", "sh", {
   "echo hi",
 })
 
+-- Pure-function cases -------------------------------------------------------
+
+local function eq(name, got, want)
+  if not vim.deep_equal(got, want) then
+    failures = failures + 1
+    print(("FAIL %s\n  want: %s\n  got:  %s"):format(name, vim.inspect(want), vim.inspect(got)))
+  else
+    print("ok   " .. name)
+  end
+end
+
+local diagnostics = require("chezmoi-template.diagnostics")
+eq(
+  "diagnostics parse line:col",
+  diagnostics.parse('chezmoi: template: default:12:3: executing "default" at <.foo>: map has no entry for key "foo"'),
+  {
+    lnum = 11,
+    col = 2,
+    message = 'executing "default" at <.foo>: map has no entry for key "foo"',
+    severity = vim.diagnostic.severity.ERROR,
+    source = "chezmoi",
+  }
+)
+eq(
+  "diagnostics parse line only",
+  diagnostics.parse("chezmoi: template: default:7: unexpected EOF"),
+  { lnum = 6, col = 0, message = "unexpected EOF", severity = vim.diagnostic.severity.ERROR, source = "chezmoi" }
+)
+eq("diagnostics parse positionless", diagnostics.parse("chezmoi: some other failure").lnum, 0)
+
+local blink = require("chezmoi-template.blink")
+eq(
+  "blink flatten",
+  blink.flatten({ chezmoi = { hostname = "k", os = "darwin" }, roles = { "base" } }),
+  {
+    { path = ".chezmoi.hostname", value = "k" },
+    { path = ".chezmoi.os", value = "darwin" },
+    { path = ".roles", value = { "base" } },
+  }
+)
+
 if failures > 0 then
   error(failures .. " test case(s) failed")
 end

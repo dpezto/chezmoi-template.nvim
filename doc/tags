@@ -1,0 +1,15 @@
+:ChezmoiApply	chezmoi-template.txt	/*:ChezmoiApply*
+:ChezmoiDiff	chezmoi-template.txt	/*:ChezmoiDiff*
+:ChezmoiPreview	chezmoi-template.txt	/*:ChezmoiPreview*
+:ChezmoiSource	chezmoi-template.txt	/*:ChezmoiSource*
+:ChezmoiTarget	chezmoi-template.txt	/*:ChezmoiTarget*
+chezmoi-template-age-engines	chezmoi-template.txt	/*chezmoi-template-age-engines*
+chezmoi-template-commands	chezmoi-template.txt	/*chezmoi-template-commands*
+chezmoi-template-completion	chezmoi-template.txt	/*chezmoi-template-completion*
+chezmoi-template-contents	chezmoi-template.txt	/*chezmoi-template-contents*
+chezmoi-template-health	chezmoi-template.txt	/*chezmoi-template-health*
+chezmoi-template-indent-directives	chezmoi-template.txt	/*chezmoi-template-indent-directives*
+chezmoi-template-introduction	chezmoi-template.txt	/*chezmoi-template-introduction*
+chezmoi-template-options	chezmoi-template.txt	/*chezmoi-template-options*
+chezmoi-template-setup	chezmoi-template.txt	/*chezmoi-template-setup*
+chezmoi-template.txt	chezmoi-template.txt	/*chezmoi-template.txt*

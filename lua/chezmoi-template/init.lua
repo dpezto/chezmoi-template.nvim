@@ -8,12 +8,20 @@ M.config = {
   -- conform.nvim formatter that formats templates as their target filetype
   format = {
     enabled = true,
-    -- rewrite interior padding of whole-line `{{-` directives so template
+    -- rewrite interior padding of column-0 `{{-` directives so template
     -- nesting depth reads as indentation: {{- lvl0 }}, {{-   lvl1 }}, …
     indent_directives = true,
   },
   -- resolve chezmoi source names to target icons in mini.icons
   icons = { enabled = true },
+  -- :ChezmoiApply / :ChezmoiDiff / :ChezmoiTarget / :ChezmoiSource / :ChezmoiPreview
+  commands = { enabled = true },
+  -- run `chezmoi apply <target>` after writing a managed source file
+  apply = { on_save = false, notify = true },
+  -- opening a deployed managed file jumps to its chezmoi source (opt-in)
+  redirect = false,
+  -- surface template errors (via `chezmoi execute-template`) as diagnostics on write
+  diagnostics = { enabled = true },
   -- transparent decrypt/encrypt of chezmoi-managed *.age files
   age = {
     enabled = false,
@@ -31,8 +39,18 @@ M.config = {
   },
 }
 
+-- Every augroup the plugin can own. Cleared unconditionally on setup() so
+-- re-running with a feature turned off removes its autocmds (setup is
+-- re-runnable: the plugin/ bootstrap may run it before the user's call).
+local GROUPS = { "tmpl", "templates", "age", "format", "icons", "commands", "diagnostics" }
+
 function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", M.config, opts or {})
+  M._did_setup = true
+
+  for _, g in ipairs(GROUPS) do
+    vim.api.nvim_create_augroup("chezmoi-template." .. g, { clear = true })
+  end
 
   -- All *.tmpl files are gotmpl; the real target language is injected by
   -- treesitter (also avoids target-language LSPs choking on template syntax).
@@ -55,6 +73,10 @@ function M.setup(opts)
   end
   if M.config.age.enabled then
     require("chezmoi-template.age").setup()
+  end
+  require("chezmoi-template.commands").setup()
+  if M.config.diagnostics.enabled then
+    require("chezmoi-template.diagnostics").setup()
   end
 end
 
