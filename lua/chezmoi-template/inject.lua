@@ -44,8 +44,10 @@ function M.setup()
       if not resolve.is_managed(ctx.file) then
         return
       end
-      -- .chezmoitemplates/ partials have no deploy target; infer from own basename
-      local target = resolve.target_path(ctx.file) or vim.fn.fnamemodify(ctx.file, ":t")
+      -- No deploy target (.chezmoitemplates/ partials, .chezmoiscripts/):
+      -- infer from the attribute-stripped basename (run_once_foo.sh.tmpl -> foo.sh)
+      local target = resolve.target_path(ctx.file)
+        or resolve.resolve_path(vim.fn.fnamemodify(ctx.file, ":t"))
       local ft
       if target:match("^%.chezmoiignore") or target:match("^%.chezmoiremove") then
         ft = "gitignore"
