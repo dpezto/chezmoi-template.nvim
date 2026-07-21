@@ -1,9 +1,12 @@
 -- Transparent editing of chezmoi-managed *.age files: decrypt on read,
 -- re-encrypt on write. Opt-in (config.age.enabled).
 --
--- Identity/recipients resolution order:
---   1. config.age.identity / config.age.recipients (string/list or function)
---   2. chezmoi's own encryption config via `chezmoi dump-config`
+-- engine = "chezmoi" (default): `chezmoi decrypt` / `chezmoi encrypt` —
+--   identities, recipients, tool choice, even gpg all come from chezmoi's own
+--   encryption config.
+-- engine = "tool": invoke an age-compatible binary directly. Resolution order
+--   for tool/identity/recipients: explicit config (string/list or function),
+--   then chezmoi's encryption config via `chezmoi dump-config`.
 local M = {}
 
 local resolve = require("chezmoi-template.resolve")
@@ -50,6 +53,23 @@ local function resolve_identity()
   end
 end
 
+local function resolve_tool()
+  local tool = cfg().tool
+  if tool and tool ~= "" then
+    return tool
+  end
+  local age = chezmoi_age_config()
+  if age and age.command and age.command ~= "" then
+    return age.command
+  end
+  return "age"
+end
+
+-- Exposed for :checkhealth
+function M.tool()
+  return resolve_tool()
+end
+
 local function resolve_recipients()
   local r = cfg().recipients
   if type(r) == "function" then
@@ -76,13 +96,44 @@ local function resolve_recipients()
   end
 end
 
-local function read_post(args)
+local function decrypt(file)
+  if cfg().engine == "chezmoi" then
+    return vim.system({ "chezmoi", "decrypt", file }, { text = true }):wait()
+  end
   local identity = resolve_identity()
   if not identity then
-    vim.notify("chezmoi-template: no age identity (set config.age.identity)", vim.log.levels.ERROR)
-    return
+    return { code = 1, stderr = "no age identity (set config.age.identity)" }
   end
-  local ret = vim.system({ cfg().tool, "--decrypt", "-i", identity, args.file }, { text = true }):wait()
+  return vim.system({ resolve_tool(), "--decrypt", "-i", identity, file }, { text = true }):wait()
+end
+
+local function encrypt(text, file)
+  if cfg().engine == "chezmoi" then
+    local ret = vim.system({ "chezmoi", "encrypt" }, { stdin = text }):wait()
+    if ret.code == 0 then
+      local out = io.open(file, "wb")
+      if not out then
+        return { code = 1, stderr = "cannot open " .. file .. " for writing" }
+      end
+      out:write(ret.stdout)
+      out:close()
+    end
+    return ret
+  end
+  local recipients = resolve_recipients()
+  if not recipients then
+    return { code = 1, stderr = "no age recipients (set config.age.recipients)" }
+  end
+  local cmd = { resolve_tool(), "--encrypt", "--armor" }
+  for _, r in ipairs(recipients) do
+    vim.list_extend(cmd, { "-r", r })
+  end
+  vim.list_extend(cmd, { "-o", file })
+  return vim.system(cmd, { stdin = text }):wait()
+end
+
+local function read_post(args)
+  local ret = decrypt(args.file)
   if ret.code ~= 0 then
     vim.notify("chezmoi-template: decryption failed:\n" .. (ret.stderr or ""), vim.log.levels.ERROR)
     return
@@ -113,12 +164,6 @@ local function read_post(args)
 end
 
 local function write_cmd(args)
-  local recipients = resolve_recipients()
-  if not recipients then
-    vim.notify("chezmoi-template: aborting save, no age recipients (set config.age.recipients)", vim.log.levels.ERROR)
-    return
-  end
-
   local lines = vim.api.nvim_buf_get_lines(args.buf, 0, -1, false)
   local text = table.concat(lines, "\n")
   -- POSIX final newline: 'eol' set (default) means the text must end with \n
@@ -126,13 +171,7 @@ local function write_cmd(args)
     text = text .. "\n"
   end
 
-  local cmd = { cfg().tool, "--encrypt", "--armor" }
-  for _, r in ipairs(recipients) do
-    vim.list_extend(cmd, { "-r", r })
-  end
-  vim.list_extend(cmd, { "-o", args.file })
-
-  local ret = vim.system(cmd, { stdin = text }):wait()
+  local ret = encrypt(text, args.file)
   if ret.code == 0 then
     vim.bo[args.buf].modified = false
     vim.api.nvim_exec_autocmds("BufWritePost", { buffer = args.buf, modeline = false })
