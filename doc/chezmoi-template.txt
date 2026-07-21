@@ -26,7 +26,8 @@ source files, so you edit them natively instead of going through
   formatter by masking Go-template spans and restoring them afterwards.
 - mini.icons lookups resolve source names (private_dot_config/...) to their
   deployed targets.
-- Optional transparent decrypt/encrypt of chezmoi-managed *.age files.
+- Optional transparent decrypt/encrypt of chezmoi-managed encrypted files
+  (*.age, *.asc).
 - Template errors surface as |vim.diagnostic| entries on write.
 - User commands for apply/diff/preview/source-jumping.
 
@@ -46,7 +47,7 @@ change options. With lazy.nvim: >lua
 <
 Without a plugin spec, options can also be set via >lua
 
-  vim.g.chezmoi_template = { age = { enabled = true } }
+  vim.g.chezmoi_template = { encryption = { enabled = true } }
 <
 before the plugin loads.
 
@@ -70,7 +71,7 @@ Defaults: >lua
     },
     redirect = false,            -- deployed file open -> jump to source
     diagnostics = { enabled = true },
-    age = {
+    encryption = {
       enabled = false,
       engine = "chezmoi",        -- "chezmoi" | "tool"
       tool = nil,                -- engine="tool": nil = chezmoi's age.command
@@ -95,11 +96,11 @@ whole-line directives so template nesting depth reads as indentation
 Directives with leading indentation (embedded in code layout) keep their
 single space.
 
-                                                  *chezmoi-template-age-engines*
-age.engine = "chezmoi" delegates to `chezmoi decrypt` / `chezmoi encrypt`:
+                                                  *chezmoi-template-encryption-engines*
+encryption.engine = "chezmoi" delegates to `chezmoi decrypt` / `chezmoi encrypt`:
 identities, recipients, tool choice (age/rage/builtin, even gpg) come from
 chezmoi's own encryption config. "tool" invokes an age-compatible binary
-directly, configured by age.tool/identity/recipients (each falls back to
+directly, configured by encryption.tool/identity/recipients (each falls back to
 chezmoi's config).
 
 ==============================================================================
@@ -129,9 +130,12 @@ chezmoi's config).
 ==============================================================================
 5. COMPLETION                                     *chezmoi-template-completion*
 
-A blink.cmp source completes template data keys (from `chezmoi data`, with
-value previews), template/sprig/chezmoi functions, and Go template keywords —
-only inside {{ … }} in gotmpl buffers. Register it in blink.cmp opts: >lua
+A blink.cmp source for gotmpl buffers. Inside {{ … }} it completes template
+data keys (from `chezmoi data`; kind icons reflect each value's type, docs
+preview the value), template/sprig/chezmoi functions, and Go template
+keywords. Outside actions it completes block snippets (if, ifelse, range,
+rangekv, with, define, block, comment) expanding to full
+`{{- … }}…{{- end }}` pairs. Register it in blink.cmp opts: >lua
 
   sources = {
     default = { "chezmoi", "lsp", "path", "buffer" },

@@ -1,5 +1,5 @@
--- Transparent editing of chezmoi-managed *.age files: decrypt on read,
--- re-encrypt on write. Opt-in (config.age.enabled).
+-- Transparent editing of chezmoi-managed encrypted files (*.age, *.asc):
+-- decrypt on read, re-encrypt on write. Opt-in (config.encryption.enabled).
 --
 -- engine = "chezmoi" (default): `chezmoi decrypt` / `chezmoi encrypt` —
 --   identities, recipients, tool choice, even gpg all come from chezmoi's own
@@ -12,7 +12,7 @@ local M = {}
 local resolve = require("chezmoi-template.resolve")
 
 local function cfg()
-  return require("chezmoi-template").config.age
+  return require("chezmoi-template").config.encryption
 end
 
 local dump_cache = "unset"
@@ -102,7 +102,7 @@ local function decrypt(file)
   end
   local identity = resolve_identity()
   if not identity then
-    return { code = 1, stderr = "no age identity (set config.age.identity)" }
+    return { code = 1, stderr = "no age identity (set config.encryption.identity)" }
   end
   return vim.system({ resolve_tool(), "--decrypt", "-i", identity, file }, { text = true }):wait()
 end
@@ -122,7 +122,7 @@ local function encrypt(text, file)
   end
   local recipients = resolve_recipients()
   if not recipients then
-    return { code = 1, stderr = "no age recipients (set config.age.recipients)" }
+    return { code = 1, stderr = "no age recipients (set config.encryption.recipients)" }
   end
   local cmd = { resolve_tool(), "--encrypt", "--armor" }
   for _, r in ipairs(recipients) do
@@ -181,11 +181,12 @@ local function write_cmd(args)
 end
 
 function M.setup()
-  local group = vim.api.nvim_create_augroup("chezmoi-template.age", { clear = true })
+  local group = vim.api.nvim_create_augroup("chezmoi-template.encryption", { clear = true })
 
   vim.api.nvim_create_autocmd("BufReadPre", {
     group = group,
-    pattern = "*.age",
+    -- .age (age/rage) and .asc (gpg) — chezmoi's encryption suffixes
+    pattern = { "*.age", "*.asc" },
     callback = function(ctx)
       -- Excluded paths (e.g. passphrase-encrypted bootstrap keys) and files
       -- outside the source dir open as plain binary.
@@ -201,7 +202,7 @@ function M.setup()
       vim.bo[ctx.buf].binary = true
       vim.bo[ctx.buf].swapfile = false
 
-      -- Buffer-local: other *.age files won't see these events
+      -- Buffer-local: other encrypted files won't see these events
       vim.api.nvim_create_autocmd("BufReadPost", {
         group = group,
         buffer = ctx.buf,

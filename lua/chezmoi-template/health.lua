@@ -29,19 +29,19 @@ function M.check()
     end
   end
 
-  if config.age.enabled then
-    if config.age.engine == "chezmoi" then
+  if config.encryption.enabled then
+    if config.encryption.engine == "chezmoi" then
       if vim.fn.executable("chezmoi") == 1 then
-        health.ok("age engine: chezmoi (decrypt/encrypt delegated to chezmoi's encryption config)")
+        health.ok("encryption engine: chezmoi (decrypt/encrypt delegated to chezmoi's encryption config)")
       else
-        health.error("age engine is 'chezmoi' but the chezmoi executable is missing")
+        health.error("encryption engine is 'chezmoi' but the chezmoi executable is missing")
       end
     else
-      local tool = require("chezmoi-template.age").tool()
+      local tool = require("chezmoi-template.encryption").tool()
       if vim.fn.executable(tool) == 1 then
-        health.ok(("age engine: tool '%s'"):format(tool))
+        health.ok(("encryption engine: tool '%s'"):format(tool))
       else
-        health.error(("age tool '%s' not found"):format(tool))
+        health.error(("encryption tool '%s' not found"):format(tool))
       end
     end
   end

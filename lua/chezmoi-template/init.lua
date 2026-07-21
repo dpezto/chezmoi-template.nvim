@@ -22,8 +22,8 @@ M.config = {
   redirect = false,
   -- surface template errors (via `chezmoi execute-template`) as diagnostics on write
   diagnostics = { enabled = true },
-  -- transparent decrypt/encrypt of chezmoi-managed *.age files
-  age = {
+  -- transparent decrypt/encrypt of chezmoi-managed encrypted files (*.age, *.asc)
+  encryption = {
     enabled = false,
     -- "chezmoi": delegate to `chezmoi decrypt` / `chezmoi encrypt` — fully
     --   config-driven (age/rage/builtin/gpg, identities, recipients all come
@@ -42,7 +42,7 @@ M.config = {
 -- Every augroup the plugin can own. Cleared unconditionally on setup() so
 -- re-running with a feature turned off removes its autocmds (setup is
 -- re-runnable: the plugin/ bootstrap may run it before the user's call).
-local GROUPS = { "tmpl", "templates", "age", "format", "icons", "commands", "diagnostics" }
+local GROUPS = { "tmpl", "templates", "encryption", "format", "icons", "commands", "diagnostics" }
 
 function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", M.config, opts or {})
@@ -71,8 +71,8 @@ function M.setup(opts)
   if M.config.icons.enabled then
     require("chezmoi-template.icons").setup()
   end
-  if M.config.age.enabled then
-    require("chezmoi-template.age").setup()
+  if M.config.encryption.enabled then
+    require("chezmoi-template.encryption").setup()
   end
   require("chezmoi-template.commands").setup()
   if M.config.diagnostics.enabled then

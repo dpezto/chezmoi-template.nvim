@@ -21,7 +21,7 @@ Most chezmoi integrations wrap the `chezmoi edit` CLI: temporary buffers, watche
 - **Live template preview.** `:ChezmoiPreview` renders the buffer through `chezmoi execute-template` into a split typed as the target filetype, re-rendered on every write.
 - **Template diagnostics.** Errors from `chezmoi execute-template` surface as `vim.diagnostic` entries on write — template typos stop being invisible until apply fails.
 - **Commands.** `:ChezmoiApply` (buffer target or `!` for all, optional apply-on-save), `:ChezmoiDiff`, `:ChezmoiTarget`, `:ChezmoiSource` (jump from a deployed file to its source; opt-in automatic redirect), `:ChezmoiPreview`.
-- **Completion** ([blink.cmp](https://github.com/Saghen/blink.cmp)). Template data keys from `chezmoi data` (with value previews), template/sprig/chezmoi functions, and Go template keywords — only inside `{{ … }}`.
+- **Completion** ([blink.cmp](https://github.com/Saghen/blink.cmp)). Inside `{{ … }}`: template data keys from `chezmoi data` (icons reflect each value's type, docs preview the value), template/sprig/chezmoi functions, and Go template keywords. Outside actions: block snippets — `if`, `if/else`, `range`, `with`, `define`, `block`, comments — expanding to full `{{- … }}…{{- end }}` pairs.
 
 Everything degrades gracefully: without the `chezmoi` binary you keep plain gotmpl highlighting and nothing errors.
 
@@ -67,7 +67,7 @@ require("chezmoi-template").setup({
   },
   redirect = false,            -- opening a deployed managed file jumps to its source
   diagnostics = { enabled = true },
-  age = {
+  encryption = {
     enabled = false,           -- opt-in
     engine = "chezmoi",        -- "chezmoi" (default) | "tool"
     -- engine = "tool" only:
@@ -83,7 +83,7 @@ require("chezmoi-template").setup({
 
 The formatter is registered with conform as `chezmoi`, and `formatters_by_ft.gotmpl = { "chezmoi" }` is set if you haven't set it yourself. It formats using the **target filetype's** formatter, so that formatter must be installed and configured in conform as usual.
 
-If you use the age module and format decrypted `*.age` buffers, route them through the `chezmoi` formatter too (it strips the `.age` suffix before handing the file to the underlying formatter):
+If you use the encryption module and format decrypted `*.age` buffers, route them through the `chezmoi` formatter too (it strips the `.age` suffix before handing the file to the underlying formatter):
 
 ```lua
 -- in your conform opts, after defining formatters_by_ft
@@ -123,13 +123,13 @@ Two engines:
 - **`engine = "chezmoi"`** (default): decrypt/encrypt delegate to `chezmoi decrypt` / `chezmoi encrypt`. Identities, recipients, tool choice — even gpg — all come from chezmoi's own encryption config. Zero plugin config:
 
   ```lua
-  age = { enabled = true, exclude = { "private%-keys" } },
+  encryption = { enabled = true, exclude = { "private%-keys" } },
   ```
 
 - **`engine = "tool"`**: invoke an age-compatible binary directly (works without consulting chezmoi at edit time). `tool` defaults to chezmoi's configured `age.command` (fallback `age`); `identity` / `recipients` default to chezmoi's encryption config, or set them explicitly — values or functions:
 
   ```lua
-  age = {
+  encryption = {
     enabled = true,
     engine = "tool",
     tool = "rage",
@@ -155,7 +155,7 @@ sources = {
 }
 ```
 
-It only activates inside `{{ … }}` in gotmpl buffers, so it stays out of the way of the target language's own completion. Note: templates using secret-manager functions (`onepassword`, `vault`, …) may make `:ChezmoiPreview`/diagnostics slow or fail without auth — those calls run whatever your template runs.
+The source only activates in gotmpl buffers. Inside `{{ … }}` it offers data keys, functions and keywords; elsewhere it offers block snippets (`if` → `{{- if … }}\n…\n{{- end }}` etc.), so it stays out of the way of the target language's own completion. Note: templates using secret-manager functions (`onepassword`, `vault`, …) may make `:ChezmoiPreview`/diagnostics slow or fail without auth — those calls run whatever your template runs.
 
 ## vs. chezmoi.nvim / chezmoi.vim / the LazyVim extra
 

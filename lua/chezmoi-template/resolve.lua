@@ -32,7 +32,7 @@ function M.resolve_path(name)
         changed = true
       end
     end
-    part = part:gsub("^dot_", "."):gsub("%.age$", ""):gsub("%.tmpl$", "")
+    part = part:gsub("^dot_", "."):gsub("%.age$", ""):gsub("%.asc$", ""):gsub("%.tmpl$", "")
     table.insert(parts, part)
   end
   local resolved = table.concat(parts, "/")

@@ -100,7 +100,7 @@ M.formatter = {
     local real_name = vim.api.nvim_buf_get_name(ctx.buf)
     local name
     if real_name ~= "" then
-      name = real_name:gsub("%.tmpl$", ""):gsub("%.age$", "")
+      name = real_name:gsub("%.tmpl$", ""):gsub("%.age$", ""):gsub("%.asc$", "")
       -- Ensure JSON targets are formatted as JSONC so the formatter accepts
       -- // comment placeholders
       if is_json then
