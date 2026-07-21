@@ -169,15 +169,15 @@ function M.setup()
   end
 
   -- Don't force-load conform at startup; formatting can't happen before the
-  -- first gotmpl FileType anyway.
-  if package.loaded["conform"] then
-    register()
-  else
-    vim.api.nvim_create_autocmd("FileType", {
+  -- first gotmpl FileType anyway. With a lazy-loaded conform the require can
+  -- fail on early FileType events, so retry until it succeeds (returning true
+  -- removes the autocmd).
+  if not register() then
+    vim.api.nvim_create_autocmd({ "FileType", "BufWritePre" }, {
       group = vim.api.nvim_create_augroup("chezmoi-template.format", { clear = true }),
-      pattern = "gotmpl",
-      once = true,
-      callback = register,
+      callback = function()
+        return register()
+      end,
     })
   end
 end
