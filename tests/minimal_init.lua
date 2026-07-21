@@ -1,0 +1,17 @@
+-- Run from the repo root: nvim --headless --clean -u tests/minimal_init.lua -l tests/run.lua
+vim.opt.rtp:prepend(vim.fn.getcwd())
+
+-- Stub conform: identity "formatter" so tests exercise masking/restore/indent
+-- logic without any external formatter binaries. Captures the masked scratch
+-- buffer for assertions.
+_G.captured_masked = nil
+package.preload["conform"] = function()
+  local M = { formatters = {}, formatters_by_ft = {} }
+  function M.format(opts, cb)
+    _G.captured_masked = vim.api.nvim_buf_get_lines(opts.bufnr, 0, -1, false)
+    cb(nil, false)
+  end
+  return M
+end
+
+require("chezmoi-template").setup({ source_dir = vim.fn.getcwd() .. "/tests" })

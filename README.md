@@ -5,9 +5,18 @@ Edit your [chezmoi](https://chezmoi.io) source files **natively** — and make N
 Most chezmoi integrations wrap the `chezmoi edit` CLI: temporary buffers, watchers, apply-on-save. This plugin takes the opposite approach: you open the real source files (in `~/.local/share/chezmoi`, under git, with your normal workflow), and the editor becomes chezmoi-aware:
 
 - **Real highlighting inside templates.** A `dot_zshrc.tmpl` is a `gotmpl` buffer whose text is treesitter-injected as **zsh** — Go-template syntax *and* target-language syntax, simultaneously. Works for any target language with a treesitter parser, resolved via `chezmoi target-path`. Includes `.chezmoitemplates/` partials, `.chezmoiignore` / `.chezmoiremove` / `.chezmoiexternal.*`.
-- **Format templates as their target filetype** ([conform.nvim](https://github.com/stevearc/conform.nvim)). Go-template spans are masked with structurally inert placeholders, the buffer is formatted with the target filetype's formatter (shfmt, biome, taplo, …), then the spans are restored — with `{{ end }}` / `{{ else }}` re-indented to pair with their opener.
+- **Format templates as their target filetype** ([conform.nvim](https://github.com/stevearc/conform.nvim)). Go-template spans are masked with structurally inert placeholders, the buffer is formatted with the target filetype's formatter (shfmt, biome, taplo, …), then the spans are restored — with `{{ end }}` / `{{ else }}` re-indented to pair with their opener, and column-0 `{{-` directive blocks getting depth-encoding interior padding:
+
+  ```
+  {{- range $name, $spec := .packages.apps }}
+  {{-   $roles := get $spec "role" }}
+  {{-   if and $roleOK $osOK }}
+  {{-     $via := get $spec "via" }}
+  {{-   end }}
+  {{- end }}
+  ```
 - **Target-aware icons** ([mini.icons](https://github.com/nvim-mini/mini.icons)). `private_dot_config/ghostty/config.tmpl` shows the ghostty icon, not a generic template glyph. Any combination of chezmoi source-state attributes (`private_`, `encrypted_`, `exact_`, `dot_`, `.tmpl`, `.age`, …) resolves to the deployed name.
-- **Transparent age encryption** (opt-in). chezmoi-managed `*.age` files decrypt on open and re-encrypt on save, using identities/recipients from your chezmoi config (or your own). `encrypted_*.tmpl.age` still gets full template + target highlighting.
+- **Transparent encryption** (opt-in). chezmoi-managed `*.age` files decrypt on open and re-encrypt on save via `chezmoi decrypt` / `chezmoi encrypt` — whatever your chezmoi config uses (age, rage, builtin age, even gpg) just works. `encrypted_*.tmpl.age` still gets full template + target highlighting.
 - **`%` matching for template delimiters** ([vim-matchup](https://github.com/andymass/vim-matchup)). `{{ if }}` ⇄ `{{ else }}` ⇄ `{{ end }}`, including `{{-` trim markers.
 
 Everything degrades gracefully: without the `chezmoi` binary you keep plain gotmpl highlighting and nothing errors.
@@ -40,13 +49,18 @@ Defaults:
 require("chezmoi-template").setup({
   source_dir = nil,            -- nil = auto-detect via `chezmoi source-path`
   inject = { enabled = true }, -- treesitter injection of the target language
-  format = { enabled = true }, -- conform formatter registration
+  format = {
+    enabled = true,            -- conform formatter registration
+    indent_directives = true,  -- depth-pad column-0 `{{-` directive blocks
+  },
   icons  = { enabled = true }, -- mini.icons resolution (no-op if absent)
   age = {
     enabled = false,           -- opt-in
-    tool = "rage",             -- or "age"
-    identity = nil,            -- path or function; default: chezmoi's encryption config
-    recipients = nil,          -- list/string or function; default: chezmoi's encryption config
+    engine = "chezmoi",        -- "chezmoi" (default) | "tool"
+    -- engine = "tool" only:
+    tool = nil,                -- nil = auto from chezmoi's config, fallback "age"
+    identity = nil,            -- path or function; nil = auto from chezmoi's config
+    recipients = nil,          -- list/string or function; nil = auto from chezmoi's config
     exclude = {},              -- lua patterns for *.age paths to leave untouched
   },
 })
@@ -89,27 +103,31 @@ local function file_icon()
 end
 ```
 
-### Age encryption
+### Encryption
 
-With no explicit `identity` / `recipients`, both are read from chezmoi's own `[age]` encryption config (`chezmoi dump-config`). Override either with a value or a function, e.g. per-host key files:
+Two engines:
 
-```lua
-age = {
-  enabled = true,
-  identity = function()
-    local host = vim.fn.hostname():gsub("%.local$", "")
-    return "~/.config/chezmoi/" .. host .. "-key.txt"
-  end,
-  recipients = function()
-    local out = vim.system(
-      { "chezmoi", "execute-template", "{{ range .age.recipients }}{{ . }}\n{{ end }}" },
-      { text = true }
-    ):wait()
-    return vim.split(vim.trim(out.stdout), "\n")
-  end,
-  exclude = { "private%-keys" }, -- e.g. passphrase-encrypted bootstrap keys
-},
-```
+- **`engine = "chezmoi"`** (default): decrypt/encrypt delegate to `chezmoi decrypt` / `chezmoi encrypt`. Identities, recipients, tool choice — even gpg — all come from chezmoi's own encryption config. Zero plugin config:
+
+  ```lua
+  age = { enabled = true, exclude = { "private%-keys" } },
+  ```
+
+- **`engine = "tool"`**: invoke an age-compatible binary directly (works without consulting chezmoi at edit time). `tool` defaults to chezmoi's configured `age.command` (fallback `age`); `identity` / `recipients` default to chezmoi's encryption config, or set them explicitly — values or functions:
+
+  ```lua
+  age = {
+    enabled = true,
+    engine = "tool",
+    tool = "rage",
+    identity = function()
+      local host = vim.fn.hostname():gsub("%.local$", "")
+      return "~/.config/chezmoi/" .. host .. "-key.txt"
+    end,
+    recipients = { "age1..." },
+    exclude = { "private%-keys" }, -- e.g. passphrase-encrypted bootstrap keys
+  },
+  ```
 
 ## vs. chezmoi.nvim / chezmoi.vim / the LazyVim extra
 
@@ -126,4 +144,8 @@ They compose: keep the LazyVim `util.chezmoi` extra for its picker and add this 
 
 ## Health
 
-`:checkhealth chezmoi-template` verifies the chezmoi binary, gotmpl parser, conform, and the age tool.
+`:checkhealth chezmoi-template` verifies the chezmoi binary, gotmpl parser, conform, and the encryption engine.
+
+## Development
+
+`make test` runs the formatter test suite headless (no external formatter binaries needed — conform is stubbed). CI runs it on stable and nightly Neovim.

@@ -15,12 +15,32 @@ M.formatter = {
     end
 
     local is_json = target_ft:match("^json")
-    local cms = not is_json and vim.filetype.get_option(target_ft, "commentstring") or nil
-    local comment = (cms and cms:match("^(%S+)")) or (is_json and "//" or "#")
+    local cms_ok, cms = pcall(vim.filetype.get_option, target_ft, "commentstring")
+    cms = (not is_json and cms_ok) and cms or nil
+    -- Split commentstring around %s: block-comment languages (html, css, c)
+    -- need the closing part too or the placeholder is an unclosed comment.
+    local prefix, suffix = is_json and "//" or "#", ""
+    if cms and cms:find("%%s") then
+      local p = vim.trim(cms:match("^(.-)%%s") or "")
+      if p ~= "" then
+        prefix = p
+      end
+      suffix = vim.trim(cms:match("%%s(.*)$") or "")
+    end
+
+    -- If the file itself contains the sentinel, restoring would corrupt it;
+    -- lengthen until unique.
+    local sentinel = "CHEZMOI_TMPL_"
+    do
+      local all = table.concat(lines, "\n")
+      while all:find(sentinel, 1, true) do
+        sentinel = sentinel .. "X"
+      end
+    end
 
     local masked, map, open = {}, {}, false
     for i, line in ipairs(lines) do
-      local key = comment .. " CHEZMOI_TMPL_" .. i
+      local key = prefix .. " " .. sentinel .. i .. (suffix ~= "" and " " .. suffix or "")
       local indent = line:match("^(%s*)")
       if open then -- continuation of a multi-line {{ … }} span
         masked[i] = key
@@ -59,7 +79,7 @@ M.formatter = {
           j = j + 1
           local tmpl = line:sub(s, t_end)
           local _, q = res:gsub('\\"', ""):gsub('"', "")
-          local k = "CHEZMOI_TMPL_" .. i .. "_" .. j
+          local k = sentinel .. i .. "_" .. j
           k = (q % 2 == 0 and not res:match('"$')) and '"' .. k .. '"' or k
           map[k] = tmpl
           res = res .. k
@@ -117,12 +137,20 @@ M.formatter = {
       -- directives: formatters misplace a comment sitting before a closing
       -- token (shfmt leaves it at col 0 before `fi`), so pair {{end}}/{{else}}
       -- with their opener's indent via a stack instead.
+      local indent_directives = require("chezmoi-template").config.format.indent_directives
       local final, stack = {}, {}
       for _, line in ipairs(formatted) do
         local indent = line:match("^(%s*)")
         local stripped = line:sub(#indent + 1)
         local tmpl = map[stripped]
         if tmpl then
+          -- Depth of this line = stack size before its own pops/pushes;
+          -- end/else belong to their opener's level.
+          local depth = #stack
+          local first_kw = tmpl:match("^{{%-?%s*(%w+)")
+          if first_kw == "end" or first_kw == "else" then
+            depth = math.max(0, depth - 1)
+          end
           local first = true
           for kw in tmpl:gmatch("{{%-?%s*(%w+)") do
             if kw == "end" then
@@ -138,6 +166,14 @@ M.formatter = {
               stack[#stack + 1] = indent
             end
             first = false
+          end
+          -- Directive-interior indent, only for column-0 `{{-` directives
+          -- (data-munging header blocks): encode template nesting depth as
+          -- padding INSIDE the action (1 space + 2 per level). Directives that
+          -- participate in code layout (non-empty leading indent) keep their
+          -- single space — the code indent already shows structure.
+          if indent_directives and indent == "" and tmpl:match("^{{%-%s") then
+            tmpl = tmpl:gsub("^{{%-%s+", "{{-" .. string.rep(" ", 1 + 2 * depth), 1)
           end
           final[#final + 1] = indent .. tmpl
         else

@@ -1,0 +1,179 @@
+local format = require("chezmoi-template.format")
+
+local failures = 0
+
+local function run_case(name, target_ft, input, expected, check_masked)
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.b[buf].chezmoi_target_ft = target_ft
+  local result, done
+  format.formatter.format(nil, { buf = buf }, input, function(err, out)
+    assert(not err, ("%s: formatter error: %s"):format(name, tostring(err)))
+    result = out
+    done = true
+  end)
+  vim.wait(5000, function()
+    return done
+  end)
+  assert(done, name .. ": formatter did not finish")
+
+  local ok = #result == #expected
+  if ok then
+    for i = 1, #expected do
+      if result[i] ~= expected[i] then
+        ok = false
+        break
+      end
+    end
+  end
+  if not ok then
+    failures = failures + 1
+    print("FAIL " .. name)
+    for i = 1, math.max(#result, #expected) do
+      if result[i] ~= expected[i] then
+        print(("  line %d\n    want: [%s]\n    got:  [%s]"):format(i, tostring(expected[i]), tostring(result[i])))
+      end
+    end
+  elseif check_masked then
+    local merr = check_masked(_G.captured_masked)
+    if merr then
+      failures = failures + 1
+      print("FAIL " .. name .. " (masked check): " .. merr)
+    else
+      print("ok   " .. name)
+    end
+  else
+    print("ok   " .. name)
+  end
+end
+
+-- 1. zsh: nested directives round-trip; interior indent normalized
+run_case("zsh nested if/range", "zsh", {
+  '{{- if eq .chezmoi.os "darwin" }}',
+  "{{- range .paths }}",
+  'export PATH="{{ . }}:$PATH"',
+  "{{- end }}",
+  "{{- else }}",
+  "echo other",
+  "{{- end }}",
+}, {
+  '{{- if eq .chezmoi.os "darwin" }}',
+  "{{-   range .paths }}",
+  'export PATH="{{ . }}:$PATH"',
+  "{{-   end }}",
+  "{{- else }}",
+  "echo other",
+  "{{- end }}",
+})
+
+-- 2. toml: inline template after `=` masked as a quoted token, restored intact
+run_case("toml inline value", "toml", {
+  "[data]",
+  "hostname = {{ .chezmoi.hostname | quote }}",
+}, {
+  "[data]",
+  "hostname = {{ .chezmoi.hostname | quote }}",
+}, function(masked)
+  for _, l in ipairs(masked) do
+    if l:match("^hostname") and not l:match('= "') then
+      return "inline placeholder after = is not quoted: " .. l
+    end
+  end
+end)
+
+-- 3. json target: comment placeholders must be // (jsonc path)
+run_case("json whole-line directive", "json", {
+  "{",
+  '{{- if .work }}',
+  '  "email": {{ .work_email | quote }},',
+  "{{- end }}",
+  '  "name": "x"',
+  "}",
+}, {
+  "{",
+  '{{- if .work }}',
+  '  "email": {{ .work_email | quote }},',
+  "{{- end }}",
+  '  "name": "x"',
+  "}",
+}, function(masked)
+  for _, l in ipairs(masked) do
+    if l:match("CHEZMOI_TMPL_%d+$") and not l:match("^%s*//") then
+      return "whole-line placeholder is not a // comment: " .. l
+    end
+  end
+end)
+
+-- 4. html target: block commentstring — placeholder must be a CLOSED comment
+run_case("html block comment placeholder", "html", {
+  "<html>",
+  "{{- if .fancy }}",
+  "<body>hi</body>",
+  "{{- end }}",
+  "</html>",
+}, {
+  "<html>",
+  "{{- if .fancy }}",
+  "<body>hi</body>",
+  "{{- end }}",
+  "</html>",
+}, function(masked)
+  for _, l in ipairs(masked) do
+    if l:find("<!--", 1, true) and not l:find("-->", 1, true) then
+      return "unclosed comment placeholder: " .. l
+    end
+  end
+end)
+
+-- 5. collision: file already contains the sentinel literally
+run_case("sentinel collision", "sh", {
+  'echo "CHEZMOI_TMPL_1"',
+  "{{- if .x }}",
+  'echo "CHEZMOI_TMPL_2 stays"',
+  "{{- end }}",
+}, {
+  'echo "CHEZMOI_TMPL_1"',
+  "{{- if .x }}",
+  'echo "CHEZMOI_TMPL_2 stays"',
+  "{{- end }}",
+})
+
+-- 6. directive-interior indenter: installer-style block, mispadded input
+run_case("directive indent depths", "sh", {
+  "{{- $os := .chezmoi.os }}",
+  "{{- range $name, $spec := .apps }}",
+  "{{- $roles := get $spec \"role\" }}",
+  "{{- if kindIs \"string\" $roles }}{{ $roles = list $roles }}{{ end }}",
+  "{{- if .ok }}",
+  "{{- $via := get $spec \"via\" }}",
+  "{{- else if .other }}",
+  "{{- $via := \"apt\" }}",
+  "{{- end }}",
+  "{{- end }}",
+}, {
+  "{{- $os := .chezmoi.os }}",
+  "{{- range $name, $spec := .apps }}",
+  "{{-   $roles := get $spec \"role\" }}",
+  "{{-   if kindIs \"string\" $roles }}{{ $roles = list $roles }}{{ end }}",
+  "{{-   if .ok }}",
+  "{{-     $via := get $spec \"via\" }}",
+  "{{-   else if .other }}",
+  "{{-     $via := \"apt\" }}",
+  "{{-   end }}",
+  "{{- end }}",
+})
+
+-- 7. multi-line action span restored verbatim
+run_case("multi-line span", "sh", {
+  "{{- /* header comment",
+  "       spanning lines */}}",
+  "echo hi",
+}, {
+  "{{- /* header comment",
+  "       spanning lines */}}",
+  "echo hi",
+})
+
+if failures > 0 then
+  error(failures .. " test case(s) failed")
+end
+print("all tests passed")
