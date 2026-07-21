@@ -71,6 +71,12 @@ Defaults: >lua
     },
     redirect = false,            -- deployed file open -> jump to source
     diagnostics = { enabled = true },
+    completion = {
+      -- hide values of matching data keys in completion docs
+      mask = { "secret", "token", "passw", "key", "api" },
+    },
+    picker = nil,                -- "snacks"|"telescope"|"fzf-lua"|"mini"|
+                                 -- "select"; nil = auto-detect
     encryption = {
       enabled = false,
       engine = "chezmoi",        -- "chezmoi" | "tool"
@@ -125,7 +131,15 @@ chezmoi's config).
                                                               *:ChezmoiPreview*
 :ChezmoiPreview       Toggle a vertical split with the rendered template
                       (`chezmoi execute-template`), typed as the target
-                      filetype and re-rendered on every write.
+                      filetype and re-rendered on every write. NOTE: templates
+                      calling secret managers render real secrets here.
+
+                                                                 *:ChezmoiPick*
+:ChezmoiPick          File picker over the source directory. Backend from
+                      the picker option; auto-detects loaded pickers
+                      (snacks > telescope > fzf-lua > mini.pick), falling
+                      back to |vim.ui.select()|. Lazy-loaded pickers may not
+                      be detected — set the option explicitly.
 
 ==============================================================================
 5. COMPLETION                                     *chezmoi-template-completion*

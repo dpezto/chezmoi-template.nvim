@@ -20,7 +20,7 @@ Most chezmoi integrations wrap the `chezmoi edit` CLI: temporary buffers, watche
 - **`%` matching for template delimiters** ([vim-matchup](https://github.com/andymass/vim-matchup)). `{{ if }}` ⇄ `{{ else }}` ⇄ `{{ end }}`, including `{{-` trim markers.
 - **Live template preview.** `:ChezmoiPreview` renders the buffer through `chezmoi execute-template` into a split typed as the target filetype, re-rendered on every write.
 - **Template diagnostics.** Errors from `chezmoi execute-template` surface as `vim.diagnostic` entries on write — template typos stop being invisible until apply fails.
-- **Commands.** `:ChezmoiApply` (buffer target or `!` for all, optional apply-on-save), `:ChezmoiDiff`, `:ChezmoiTarget`, `:ChezmoiSource` (jump from a deployed file to its source; opt-in automatic redirect), `:ChezmoiPreview`.
+- **Commands.** `:ChezmoiApply` (buffer target or `!` for all, optional apply-on-save), `:ChezmoiDiff`, `:ChezmoiTarget`, `:ChezmoiSource` (jump from a deployed file to its source; opt-in automatic redirect), `:ChezmoiPreview`, `:ChezmoiPick` (source-file picker: snacks / telescope / fzf-lua / mini.pick / `vim.ui.select`).
 - **Completion** ([blink.cmp](https://github.com/Saghen/blink.cmp)). Inside `{{ … }}`: template data keys from `chezmoi data` (icons reflect each value's type, docs preview the value), template/sprig/chezmoi functions, and Go template keywords. Outside actions: block snippets — `if`, `if/else`, `range`, `with`, `define`, `block`, comments — expanding to full `{{- … }}…{{- end }}` pairs.
 
 Everything degrades gracefully: without the `chezmoi` binary you keep plain gotmpl highlighting and nothing errors.
@@ -67,6 +67,11 @@ require("chezmoi-template").setup({
   },
   redirect = false,            -- opening a deployed managed file jumps to its source
   diagnostics = { enabled = true },
+  completion = {
+    -- hide values of data keys matching these patterns in completion docs
+    mask = { "secret", "token", "passw", "key", "api" },
+  },
+  picker = nil,                -- "snacks"|"telescope"|"fzf-lua"|"mini"|"select"; nil = auto
   encryption = {
     enabled = false,           -- opt-in
     engine = "chezmoi",        -- "chezmoi" (default) | "tool"
@@ -157,6 +162,34 @@ sources = {
 
 The source only activates in gotmpl buffers. Inside `{{ … }}` it offers data keys, functions and keywords; elsewhere it offers block snippets (`if` → `{{- if … }}\n…\n{{- end }}` etc.), so it stays out of the way of the target language's own completion. Note: templates using secret-manager functions (`onepassword`, `vault`, …) may make `:ChezmoiPreview`/diagnostics slow or fail without auth — those calls run whatever your template runs.
 
+## Picker
+
+`:ChezmoiPick` opens a file picker over the source directory. Backend auto-detects among loaded pickers (snacks → telescope → fzf-lua → mini.pick) with a `vim.ui.select` fallback; if your picker is lazy-loaded it may not be detected — set `picker = "telescope"` (etc.) explicitly. Map it however you like:
+
+```lua
+keys = { { "<leader>sz", "<cmd>ChezmoiPick<cr>", desc = "Chezmoi source files" } },
+```
+
+## Secrets
+
+What the plugin does by itself:
+
+- Decrypted buffers never persist plaintext: `swapfile`, `undofile` and swap are disabled, and writes go straight through the encryption engine (no plaintext temp file).
+- Completion docs hide values of data keys matching `completion.mask` (default: `secret`, `token`, `passw`, `key`, `api`) — the key still completes, the value shows as `•••••`.
+
+What you should know:
+
+- `:ChezmoiPreview` and diagnostics run `chezmoi execute-template` on your buffer — templates calling secret managers (`onepassword`, `vault`, `pass`, …) will render real secrets into the preview split, and may be slow or fail without auth. Don't screen-share the preview of a secrets template.
+- [cloak.nvim](https://github.com/laytan/cloak.nvim) composes well for masking secrets in decrypted buffers — its `file_pattern`s match the buffer name, which keeps its encrypted suffix: add `"*.age"`/`"*.asc"` (or specific names like `"*.json.age"`) to your cloak patterns.
+- [ecolog.nvim](https://github.com/philosofonusus/ecolog.nvim) env completion works inside templates by mirroring its providers onto the `gotmpl` filetype; its shelter mode then masks env values in completion/peek as usual:
+
+  ```lua
+  -- ecolog opts.providers: reuse shell providers for gotmpl buffers
+  providers = vim.tbl_map(function(p)
+    return vim.tbl_extend("force", p, { filetype = "gotmpl" })
+  end, shell_providers),
+  ```
+
 ## vs. chezmoi.nvim / chezmoi.vim / the LazyVim extra
 
 | | chezmoi.nvim + chezmoi.vim | chezmoi-template.nvim |
@@ -169,7 +202,7 @@ The source only activates in gotmpl buffers. Inside `{{ … }}` it offers data k
 | Preview / diagnostics | — | `:ChezmoiPreview`, template errors as diagnostics |
 | Completion | — | data keys + template functions (blink.cmp) |
 | Apply | apply-on-save via `chezmoi edit --watch` | `:ChezmoiApply`, opt-in apply-on-save |
-| Picker | telescope/fzf/snacks picker | bring your own (composes with the extra's) |
+| Picker | telescope/fzf/snacks picker | `:ChezmoiPick` — snacks/telescope/fzf-lua/mini.pick/select |
 
 ## Health
 

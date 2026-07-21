@@ -170,6 +170,10 @@ local function define_commands()
   vim.api.nvim_create_user_command("ChezmoiPreview", preview_toggle, {
     desc = "toggle rendered preview of the current template (updates on write)",
   })
+
+  vim.api.nvim_create_user_command("ChezmoiPick", function()
+    require("chezmoi-template.picker").open()
+  end, { desc = "pick a chezmoi source file (snacks/telescope/fzf-lua/mini.pick/select)" })
 end
 
 function M.setup()
