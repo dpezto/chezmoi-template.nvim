@@ -204,6 +204,46 @@ eq(
 eq("diagnostics parse positionless", diagnostics.parse("chezmoi: some other failure").lnum, 0)
 
 local blink = require("chezmoi-template.blink")
+
+-- context-aware completions: snippets outside {{ }}, symbols inside
+do
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(buf)
+  vim.bo[buf].filetype = "gotmpl"
+  local src = blink.new()
+
+  local function labels_at(line, col)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { line })
+    vim.api.nvim_win_set_cursor(0, { 1, col })
+    local got
+    src:get_completions(nil, function(res)
+      got = res.items
+    end)
+    return got
+  end
+
+  local outside = labels_at("", 0)
+  local has_if_snippet, has_fn = false, false
+  for _, it in ipairs(outside) do
+    if it.label == "if" and it.insertTextFormat == 2 and it.insertText:find("{{- end }}", 1, true) then
+      has_if_snippet = true
+    end
+  end
+  eq("blink outside {{ }} offers block snippets", has_if_snippet, true)
+
+  local inside = labels_at("{{ .che }}", 7)
+  local has_snippet = false
+  for _, it in ipairs(inside) do
+    if it.insertTextFormat == 2 then
+      has_snippet = true
+    end
+    if it.label == "includeTemplate" then
+      has_fn = true
+    end
+  end
+  eq("blink inside {{ }} offers symbols, no snippets", { has_fn, has_snippet }, { true, false })
+end
+
 eq(
   "blink flatten",
   blink.flatten({ chezmoi = { hostname = "k", os = "darwin" }, roles = { "base" } }),
