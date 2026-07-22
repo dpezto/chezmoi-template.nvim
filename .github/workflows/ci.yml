@@ -8,12 +8,21 @@ on:
     # weekly run so nvim-nightly API drift surfaces without waiting for a push
     - cron: "0 6 * * 1"
 
+permissions:
+  contents: read
+
 jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: reviewdog/action-actionlint@50842263c20a7c46bd0065b9e624d3c569db061e # v1
+
   stylua:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: JohnnyMorganz/stylua-action@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: JohnnyMorganz/stylua-action@76fd70c03e6340ceaf673366712db9b20560b402 # v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           version: latest
@@ -25,8 +34,8 @@ jobs:
       matrix:
         neovim: [stable, nightly]
     steps:
-      - uses: actions/checkout@v7
-      - uses: rhysd/action-setup-vim@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: rhysd/action-setup-vim@febef33995d6649302e9d88dda81e071b68f16a7 # v1
         with:
           neovim: true
           version: ${{ matrix.neovim }}
@@ -45,7 +54,7 @@ jobs:
           "$HOME/.luarocks/bin/luacov" -r lcov
           sed -i "s|^SF:$GITHUB_WORKSPACE/|SF:|" luacov.report.out
       - if: matrix.neovim == 'stable'
-        uses: coverallsapp/github-action@v2
+        uses: coverallsapp/github-action@5cbfd81b66ca5d10c19b062c04de0199c215fb6e # v2
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           file: luacov.report.out
@@ -59,6 +68,6 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: googleapis/release-please-action@v5
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
         with:
           release-type: simple
