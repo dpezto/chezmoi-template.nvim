@@ -11,9 +11,18 @@ end
 -- the deployed target path (e.g. private_dot_zshrc.tmpl -> .zshrc). Pure string
 -- transform: works without the chezmoi binary and on paths outside the source dir.
 function M.resolve_path(name)
+  -- normalize converts `\` to `/` on Windows; a drive-letter root ("C:/")
+  -- must survive as a prefix, not be attribute-stripped as a path component
+  name = vim.fs.normalize(name)
+  local prefix = ""
+  if vim.fn.has("win32") == 1 then
+    prefix = name:match("^%a:/") or ""
+  end
+  if prefix == "" and name:sub(1, 1) == "/" then
+    prefix = "/"
+  end
   local parts = {}
-  local is_abs = name:sub(1, 1) == "/"
-  for part in name:gmatch("[^/]+") do
+  for part in name:sub(#prefix + 1):gmatch("[^/]+") do
     local changed = true
     while changed do
       changed = false
@@ -35,14 +44,11 @@ function M.resolve_path(name)
     part = part:gsub("^dot_", "."):gsub("%.age$", ""):gsub("%.asc$", ""):gsub("%.tmpl$", "")
     table.insert(parts, part)
   end
-  local resolved = table.concat(parts, "/")
-  if is_abs then
-    resolved = "/" .. resolved
-  end
-  return resolved
+  return prefix .. table.concat(parts, "/")
 end
 
 -- false = resolution failed (distinct from "not resolved yet")
+---@type string|false
 local source_cache = "unset"
 
 function M.source_dir()
@@ -127,27 +133,45 @@ function M.target_ft(target)
   end
 end
 
--- Absolute target paths of all managed files, cached after one
--- `chezmoi managed` call (single spawn; O(1) lookups afterwards).
+-- One `chezmoi managed` spawn -> set of normalized paths, or nil on failure
+-- (missing binary, old chezmoi without the path style, no config).
+local function managed_listing(style)
+  if not M.has_chezmoi() then
+    return nil
+  end
+  local ret = vim.system({ "chezmoi", "managed", "--path-style", style, "--include", "files" }, { text = true }):wait()
+  if ret.code ~= 0 then
+    return nil
+  end
+  local set = {}
+  for line in ret.stdout:gmatch("[^\n]+") do
+    set[vim.fs.normalize(line)] = true
+  end
+  return set
+end
+
+-- Absolute target paths of all managed files (single spawn; O(1) lookups).
 local managed_cache
 
 function M.managed_set()
-  if managed_cache then
-    return managed_cache
-  end
-  managed_cache = {}
-  if M.has_chezmoi() then
-    local ret = vim.system(
-      { "chezmoi", "managed", "--path-style", "absolute", "--include", "files" },
-      { text = true }
-    ):wait()
-    if ret.code == 0 then
-      for line in ret.stdout:gmatch("[^\n]+") do
-        managed_cache[vim.fs.normalize(line)] = true
-      end
-    end
+  if not managed_cache then
+    managed_cache = managed_listing("absolute") or {}
   end
   return managed_cache
+end
+
+-- Absolute *source* paths of all managed files. Lets BufReadPre skip a doomed
+-- per-file `target-path` spawn for source files with no deploy target
+-- (partials, scripts). Returns nil when the listing is unavailable so callers
+-- fall back to target_path.
+---@type table|false|nil
+local source_set_cache
+
+function M.source_set()
+  if source_set_cache == nil then
+    source_set_cache = managed_listing("source-absolute") or false
+  end
+  return source_set_cache or nil
 end
 
 -- Render template text through `chezmoi execute-template` (async).
@@ -177,6 +201,21 @@ function M.data()
     end
   end
   return data_cache or nil
+end
+
+-- Drop caches that go stale when chezmoi state changes outside Neovim
+-- (`chezmoi add`/`forget` in a shell, data edits). Positive target-path
+-- mappings survive — they don't change for existing files; negative ones are
+-- dropped so newly-added files resolve. Wired to FocusGained in setup().
+function M.invalidate()
+  managed_cache = nil
+  source_set_cache = nil
+  data_cache = nil
+  for file, target in pairs(target_cache) do
+    if target == false then
+      target_cache[file] = nil
+    end
+  end
 end
 
 -- Record the target filetype/language on the buffer for the inject-chezmoi!

@@ -14,10 +14,10 @@ M.config = {
   },
   -- resolve chezmoi source names to target icons in mini.icons
   icons = { enabled = true },
-  -- :ChezmoiApply / :ChezmoiDiff / :ChezmoiTarget / :ChezmoiSource / :ChezmoiPreview
-  commands = { enabled = true },
   -- run `chezmoi apply <target>` after writing a managed source file
-  apply = { on_save = false, notify = true },
+  apply = { on_save = true, notify = true },
+  -- notify when opening a chezmoi-managed source file (à la chezmoi.nvim)
+  notify_on_open = false,
   -- opening a deployed managed file jumps to its chezmoi source (opt-in)
   redirect = false,
   -- surface template errors (via `chezmoi execute-template`) as diagnostics on write
@@ -31,34 +31,32 @@ M.config = {
   -- nil = auto-detect among loaded pickers, falling back to vim.ui.select
   picker = nil,
   -- transparent decrypt/encrypt of chezmoi-managed encrypted files (*.age, *.asc)
+  -- via `chezmoi decrypt` / `chezmoi encrypt` (age/rage/builtin/gpg, identities,
+  -- recipients all come from chezmoi's own encryption config)
   encryption = {
     enabled = false,
-    -- "chezmoi": delegate to `chezmoi decrypt` / `chezmoi encrypt` — fully
-    --   config-driven (age/rage/builtin/gpg, identities, recipients all come
-    --   from chezmoi's own encryption config). Recommended.
-    -- "tool": invoke an age-compatible binary directly (no chezmoi needed at
-    --   encrypt/decrypt time); configured by the fields below.
-    engine = "chezmoi",
-    -- engine = "tool" only:
-    tool = nil, -- nil = auto from `chezmoi dump-config` .age.command, fallback "age"
-    identity = nil, -- path or function; nil = auto from chezmoi's encryption config
-    recipients = nil, -- list/string or function; nil = auto from chezmoi's encryption config
     exclude = {}, -- lua patterns for *.age paths to leave untouched
   },
 }
 
--- Every augroup the plugin can own. Cleared unconditionally on setup() so
--- re-running with a feature turned off removes its autocmds (setup is
--- re-runnable: the plugin/ bootstrap may run it before the user's call).
-local GROUPS = { "tmpl", "templates", "encryption", "format", "icons", "commands", "diagnostics" }
+local COMMANDS = { "ChezmoiApply", "ChezmoiDiff", "ChezmoiTarget", "ChezmoiSource", "ChezmoiPreview", "ChezmoiPick" }
 
+-- setup() is cheap: it only registers filetype detection, the treesitter
+-- injection directive, and light triggers. The heavy work (module requires,
+-- autocmds) is deferred to M._activate(), fired by the first template open or
+-- :Chezmoi* command — so startup stays cheap whether the plugin is loaded via
+-- the plugin/ bootstrap or an eager setup(opts) from a lazy.nvim spec.
 function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", M.config, opts or {})
   M._did_setup = true
+  M._register()
+end
 
-  for _, g in ipairs(GROUPS) do
-    vim.api.nvim_create_augroup("chezmoi-template." .. g, { clear = true })
+function M._register()
+  if M._registered then
+    return
   end
+  M._registered = true
 
   -- All *.tmpl files are gotmpl; the real target language is injected by
   -- treesitter (also avoids target-language LSPs choking on template syntax).
@@ -69,6 +67,49 @@ function M.setup(opts)
       [".chezmoiremove"] = "gitignore",
     },
   })
+
+  -- The bundled gotmpl injection query references inject-chezmoi!, and
+  -- treesitter parses gotmpl trees (highlighting, vim-matchup, render-markdown)
+  -- before activation — the handler must exist up front or those parses error
+  -- "No handler for inject-chezmoi!". Registration is cheap; its callback only
+  -- touches resolve when a tree is actually parsed.
+  require("chezmoi-template.inject").register_directive()
+
+  local group = vim.api.nvim_create_augroup("chezmoi-template.bootstrap", { clear = true })
+  vim.api.nvim_create_autocmd({ "BufReadPre", "BufNewFile" }, {
+    group = group,
+    pattern = { "*.tmpl", ".chezmoiignore*", ".chezmoiremove*", ".chezmoiexternal*" },
+    callback = function(ev)
+      M._activate()
+      -- This buffer's BufReadPre already passed; seed it directly. Use ev.file
+      -- (the autocmd <afile>, unresolved) not nvim_buf_get_name (symlink-
+      -- resolved), so is_managed matches chezmoi's source dir path form.
+      if ev.file ~= "" then
+        require("chezmoi-template.inject").seed_buffer(ev.buf, ev.file)
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd("FileType", {
+    group = group,
+    pattern = "gotmpl",
+    callback = function()
+      M._activate()
+    end,
+  })
+  for _, name in ipairs(COMMANDS) do
+    vim.api.nvim_create_user_command(name, function(a)
+      M._activate() -- replaces this stub with the real command
+      vim.cmd(("%s%s %s"):format(name, a.bang and "!" or "", a.args))
+    end, { bang = true, nargs = "*", desc = "chezmoi-template (loads on first use)" })
+  end
+end
+
+function M._activate()
+  if M._activated then
+    return
+  end
+  M._activated = true
+  pcall(vim.api.nvim_del_augroup_by_name, "chezmoi-template.bootstrap")
 
   if M.config.inject.enabled then
     require("chezmoi-template.inject").setup()
@@ -87,10 +128,28 @@ function M.setup(opts)
     require("chezmoi-template.diagnostics").setup()
   end
 
+  -- Group for the plugin-level autocmds below; clear = false so it doesn't wipe
+  -- inject's autocmds if inject.setup already created and populated it.
+  local core = vim.api.nvim_create_augroup("chezmoi-template.tmpl", { clear = false })
+
+  -- Chezmoi state changes outside Neovim (`chezmoi add` in a shell, data
+  -- edits) — FocusGained is the natural boundary to drop stale caches.
+  -- Rebuilds are lazy, so an unfocused/refocused session with no lookups
+  -- costs nothing.
+  vim.api.nvim_create_autocmd("FocusGained", {
+    group = core,
+    callback = function()
+      require("chezmoi-template.resolve").invalidate()
+      if package.loaded["chezmoi-template.blink"] then
+        require("chezmoi-template.blink").invalidate()
+      end
+    end,
+  })
+
   -- Warm the `chezmoi data` cache off the first template's back, so the first
   -- completion doesn't pay the spawn. Deferred: FileType handlers finish first.
   vim.api.nvim_create_autocmd("FileType", {
-    group = "chezmoi-template.tmpl",
+    group = core,
     pattern = "gotmpl",
     once = true,
     callback = function()

@@ -8,7 +8,7 @@ local M = {}
 local backends = {
   snacks = {
     avail = function()
-      return package.loaded["snacks"] ~= nil or pcall(require, "snacks")
+      return pcall(require, "snacks")
     end,
     open = function(src)
       require("snacks").picker.files({ cwd = src, hidden = true })
@@ -16,7 +16,7 @@ local backends = {
   },
   telescope = {
     avail = function()
-      return package.loaded["telescope"] ~= nil or pcall(require, "telescope.builtin")
+      return pcall(require, "telescope.builtin")
     end,
     open = function(src)
       require("telescope.builtin").find_files({ cwd = src, hidden = true })
@@ -24,7 +24,7 @@ local backends = {
   },
   ["fzf-lua"] = {
     avail = function()
-      return package.loaded["fzf-lua"] ~= nil or pcall(require, "fzf-lua")
+      return pcall(require, "fzf-lua")
     end,
     open = function(src)
       require("fzf-lua").files({ cwd = src, hidden = true })
@@ -32,7 +32,7 @@ local backends = {
   },
   mini = {
     avail = function()
-      return package.loaded["mini.pick"] ~= nil or pcall(require, "mini.pick")
+      return pcall(require, "mini.pick")
     end,
     open = function(src)
       require("mini.pick").builtin.files(nil, { source = { cwd = src } })
@@ -44,17 +44,16 @@ local backends = {
     end,
     open = function(src)
       -- Managed source files via chezmoi itself; no external picker needed
-      local ret = vim.system(
-        { "chezmoi", "managed", "--path-style", "source-relative", "--include", "files" },
-        { text = true }
-      ):wait()
+      local ret = vim
+        .system({ "chezmoi", "managed", "--path-style", "source-relative", "--include", "files" }, { text = true })
+        :wait()
       if ret.code ~= 0 then
-        return vim.notify("chezmoi: managed listing failed", vim.log.levels.ERROR)
+        return vim.notify("managed listing failed", vim.log.levels.ERROR, { title = "chezmoi" })
       end
       local files = vim.split(vim.trim(ret.stdout), "\n")
       vim.ui.select(files, { prompt = "chezmoi source files" }, function(choice)
         if choice then
-          vim.cmd.edit(vim.fn.fnameescape(src .. choice))
+          vim.cmd.edit(vim.fn.fnameescape(vim.fs.joinpath(src, choice)))
         end
       end)
     end,
@@ -66,13 +65,13 @@ local ORDER = { "snacks", "telescope", "fzf-lua", "mini", "select" }
 function M.open()
   local src = require("chezmoi-template.resolve").source_dir()
   if not src then
-    return vim.notify("chezmoi: source directory not found", vim.log.levels.ERROR)
+    return vim.notify("source directory not found", vim.log.levels.ERROR, { title = "chezmoi" })
   end
   local choice = require("chezmoi-template").config.picker
   if choice then
     local backend = backends[choice]
     if not backend then
-      return vim.notify("chezmoi: unknown picker '" .. choice .. "'", vim.log.levels.ERROR)
+      return vim.notify("unknown picker '" .. choice .. "'", vim.log.levels.ERROR, { title = "chezmoi" })
     end
     return backend.open(src)
   end

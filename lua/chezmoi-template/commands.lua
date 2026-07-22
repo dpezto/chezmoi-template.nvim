@@ -3,8 +3,10 @@ local M = {}
 
 local resolve = require("chezmoi-template.resolve")
 
+-- Titled so nvim-notify/noice render a "chezmoi" toast; plain vim.notify
+-- ignores the opts and the messages still read fine bare.
 local function notify(msg, level)
-  vim.notify("chezmoi: " .. msg, level or vim.log.levels.INFO)
+  vim.notify(msg, level or vim.log.levels.INFO, { title = "chezmoi" })
 end
 
 local function buf_target(buf)
@@ -34,6 +36,15 @@ local function apply(target)
   end)
 end
 
+-- `q` closes plugin-owned scratch splits (diff, preview)
+local function map_close(buf)
+  vim.keymap.set("n", "q", function()
+    if vim.api.nvim_buf_is_valid(buf) then
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end
+  end, { buffer = buf, nowait = true, desc = "close chezmoi split" })
+end
+
 local function open_scratch_split(lines, ft)
   vim.cmd("botright new")
   local buf = vim.api.nvim_get_current_buf()
@@ -45,13 +56,14 @@ local function open_scratch_split(lines, ft)
   if ft then
     vim.bo[buf].filetype = ft
   end
+  map_close(buf)
   return buf
 end
 
 -- :ChezmoiPreview — render the current template via execute-template into a
 -- vsplit typed as the target filetype; re-renders on every write while open.
 -- Running it again closes the preview.
-local preview_state = {} -- src buf -> { buf = preview buf }
+local preview_state = {} -- src buf -> preview buf
 
 local function preview_render(src, dest)
   local text = table.concat(vim.api.nvim_buf_get_lines(src, 0, -1, false), "\n") .. "\n"
@@ -78,11 +90,18 @@ end
 
 local function preview_toggle()
   local src = vim.api.nvim_get_current_buf()
-  local state = preview_state[src]
-  if state and vim.api.nvim_buf_is_valid(state.buf) then
-    vim.api.nvim_buf_delete(state.buf, { force = true })
+  local existing = preview_state[src]
+  if existing and vim.api.nvim_buf_is_valid(existing) then
+    vim.api.nvim_buf_delete(existing, { force = true })
     preview_state[src] = nil
     return
+  end
+
+  -- Non-template buffers (plain managed files, anything else) have nothing to
+  -- render — chezmoi only templates gotmpl-typed sources. Same guard shape as
+  -- the other commands: warn, don't open a useless split.
+  if vim.bo[src].filetype ~= "gotmpl" then
+    return notify("not a chezmoi template buffer", vim.log.levels.WARN)
   end
 
   local target_ft = vim.b[src].chezmoi_target_ft
@@ -91,11 +110,19 @@ local function preview_toggle()
   vim.bo[dest].buftype = "nofile"
   vim.bo[dest].bufhidden = "wipe"
   vim.bo[dest].swapfile = false
+  -- Named after the deploy target so statuslines/tabs show the rendered
+  -- file's identity (dot_zshrc.tmpl previews as .zshrc); the protocol prefix
+  -- keeps it distinct from the real target buffer and unique per source.
+  local src_file = vim.api.nvim_buf_get_name(src)
+  local target_name = resolve.target_path(src_file) or resolve.resolve_path(vim.fn.fnamemodify(src_file, ":t"))
+  -- pcall: a second preview with the same target name would E95 on collision
+  pcall(vim.api.nvim_buf_set_name, dest, "chezmoi-preview://" .. target_name)
   if target_ft and target_ft ~= "gotmpl" then
     vim.bo[dest].filetype = target_ft
   end
+  map_close(dest)
   vim.cmd.wincmd("p")
-  preview_state[src] = { buf = dest }
+  preview_state[src] = dest
 
   vim.api.nvim_create_autocmd("BufWritePost", {
     group = "chezmoi-template.commands",
@@ -178,9 +205,8 @@ end
 
 function M.setup()
   local config = require("chezmoi-template").config
-  if config.commands.enabled then
-    define_commands()
-  end
+  vim.api.nvim_create_augroup("chezmoi-template.commands", { clear = true })
+  define_commands()
 
   if config.apply.on_save then
     vim.api.nvim_create_autocmd("BufWritePost", {
@@ -193,6 +219,24 @@ function M.setup()
         if target then
           apply(target)
         end
+      end,
+    })
+  end
+
+  if config.notify_on_open then
+    vim.api.nvim_create_autocmd("BufReadPost", {
+      group = "chezmoi-template.commands",
+      callback = function(ctx)
+        if vim.b[ctx.buf].chezmoi_notified or not resolve.is_managed(ctx.file) then
+          return
+        end
+        vim.b[ctx.buf].chezmoi_notified = true
+        local target = resolve.target_path(ctx.file)
+        local msg = "chezmoi-managed" .. (target and (" → " .. vim.fn.fnamemodify(target, ":~")) or "")
+        if config.apply.on_save then
+          msg = msg .. " — applies on save"
+        end
+        notify(msg)
       end,
     })
   end

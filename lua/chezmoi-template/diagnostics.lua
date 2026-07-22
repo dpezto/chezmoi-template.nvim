@@ -52,6 +52,7 @@ function M.check(buf)
 end
 
 function M.setup()
+  vim.api.nvim_create_augroup("chezmoi-template.diagnostics", { clear = true })
   vim.api.nvim_create_autocmd("BufWritePost", {
     group = "chezmoi-template.diagnostics",
     pattern = "*.tmpl",

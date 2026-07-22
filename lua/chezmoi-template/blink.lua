@@ -29,6 +29,7 @@ local ICON = {
   snippet = { "󱄽", "@constructor" },
 }
 
+-- stylua: ignore
 local KEYWORDS = {
   "if", "else", "end", "range", "with", "template", "define", "block",
   "and", "or", "not", "eq", "ne", "lt", "le", "gt", "ge", "index", "len",
@@ -38,49 +39,144 @@ local KEYWORDS = {
 -- Curated: Go template + sprig + chezmoi-specific functions
 local FUNCTIONS = {
   -- strings
-  "quote", "squote", "upper", "lower", "title", "trim", "trimAll",
-  "trimPrefix", "trimSuffix", "replace", "contains", "hasPrefix", "hasSuffix",
-  "indent", "nindent", "repeat", "substr", "trunc", "cat",
+  "quote",
+  "squote",
+  "upper",
+  "lower",
+  "title",
+  "trim",
+  "trimAll",
+  "trimPrefix",
+  "trimSuffix",
+  "replace",
+  "contains",
+  "hasPrefix",
+  "hasSuffix",
+  "indent",
+  "nindent",
+  "repeat",
+  "substr",
+  "trunc",
+  "cat",
   -- flow / defaults
-  "default", "empty", "coalesce", "ternary", "required", "fail",
+  "default",
+  "empty",
+  "coalesce",
+  "ternary",
+  "required",
+  "fail",
   -- collections
-  "list", "dict", "get", "set", "hasKey", "keys", "values", "append",
-  "prepend", "concat", "uniq", "has", "first", "rest", "last", "initial",
-  "join", "split", "splitList", "sortAlpha",
+  "list",
+  "dict",
+  "get",
+  "set",
+  "hasKey",
+  "keys",
+  "values",
+  "append",
+  "prepend",
+  "concat",
+  "uniq",
+  "has",
+  "first",
+  "rest",
+  "last",
+  "initial",
+  "join",
+  "split",
+  "splitList",
+  "sortAlpha",
   -- types / conversion
-  "kindIs", "kindOf", "typeOf", "typeIs", "deepEqual", "toString", "atoi",
-  "int", "int64", "float64", "toJson", "fromJson", "toYaml", "fromYaml",
-  "toToml", "fromToml", "fromIni", "toIni",
+  "kindIs",
+  "kindOf",
+  "typeOf",
+  "typeIs",
+  "deepEqual",
+  "toString",
+  "atoi",
+  "int",
+  "int64",
+  "float64",
+  "toJson",
+  "fromJson",
+  "toYaml",
+  "fromYaml",
+  "toToml",
+  "fromToml",
+  "fromIni",
+  "toIni",
   -- math
-  "add", "sub", "mul", "div", "mod", "max", "min",
+  "add",
+  "sub",
+  "mul",
+  "div",
+  "mod",
+  "max",
+  "min",
   -- regex
-  "regexMatch", "regexFind", "regexFindAll", "regexReplaceAll", "regexSplit",
+  "regexMatch",
+  "regexFind",
+  "regexFindAll",
+  "regexReplaceAll",
+  "regexSplit",
   -- encoding / hashing
-  "b64enc", "b64dec", "sha256sum",
+  "b64enc",
+  "b64dec",
+  "sha256sum",
   -- environment / time
-  "env", "expandenv", "now", "date",
+  "env",
+  "expandenv",
+  "now",
+  "date",
   -- chezmoi
-  "include", "includeTemplate", "joinPath", "lookPath", "stat", "glob",
-  "output", "outputList", "eqFold", "quoteList", "replaceAllRegex",
-  "decrypt", "encrypt", "promptString", "promptBool", "promptInt",
-  "promptStringOnce", "promptBoolOnce", "promptIntOnce", "stdinIsATTY",
-  "gitHubKeys", "gitHubLatestRelease", "ioreg", "mozillaInstallHash",
-  "onepassword", "onepasswordRead", "bitwarden", "pass", "keepassxc",
-  "keyring", "lastpass", "vault", "secret", "exit",
+  "include",
+  "includeTemplate",
+  "joinPath",
+  "lookPath",
+  "stat",
+  "glob",
+  "output",
+  "outputList",
+  "eqFold",
+  "quoteList",
+  "replaceAllRegex",
+  "decrypt",
+  "encrypt",
+  "promptString",
+  "promptBool",
+  "promptInt",
+  "promptStringOnce",
+  "promptBoolOnce",
+  "promptIntOnce",
+  "stdinIsATTY",
+  "gitHubKeys",
+  "gitHubLatestRelease",
+  "ioreg",
+  "mozillaInstallHash",
+  "onepassword",
+  "onepasswordRead",
+  "bitwarden",
+  "pass",
+  "keepassxc",
+  "keyring",
+  "lastpass",
+  "vault",
+  "secret",
+  "exit",
 }
 
 -- {{- if }} … {{- end }} and friends, as LSP snippets
 local BLOCKS = {
-  { label = "if",      body = "{{- if ${1:condition} }}\n$0\n{{- end }}" },
-  { label = "ifelse",  body = "{{- if ${1:condition} }}\n$2\n{{- else }}\n$0\n{{- end }}" },
-  { label = "range",   body = "{{- range ${1:.items} }}\n$0\n{{- end }}" },
+  { label = "if", body = "{{- if ${1:condition} }}\n$0\n{{- end }}" },
+  { label = "ifelse", body = "{{- if ${1:condition} }}\n$2\n{{- else }}\n$0\n{{- end }}" },
+  { label = "range", body = "{{- range ${1:.items} }}\n$0\n{{- end }}" },
   { label = "rangekv", body = "{{- range ${1:\\$k}, ${2:\\$v} := ${3:.items} }}\n$0\n{{- end }}" },
-  { label = "with",    body = "{{- with ${1:.value} }}\n$0\n{{- end }}" },
-  { label = "define",  body = "{{- define \"${1:name}\" }}\n$0\n{{- end }}" },
-  { label = "block",   body = "{{- block \"${1:name}\" ${2:.} }}\n$0\n{{- end }}" },
+  { label = "with", body = "{{- with ${1:.value} }}\n$0\n{{- end }}" },
+  { label = "define", body = '{{- define "${1:name}" }}\n$0\n{{- end }}' },
+  { label = "block", body = '{{- block "${1:name}" ${2:.} }}\n$0\n{{- end }}' },
   { label = "comment", body = "{{- /* $0 */}}" },
-  { label = "tmpl",    body = "{{ template \"${1:name}\" ${2:.} }}" },
-  { label = "inc",     body = "{{ includeTemplate \"${1:name}\" ${2:.} }}" },
+  { label = "tmpl", body = '{{ template "${1:name}" ${2:.} }}' },
+  { label = "inc", body = '{{ includeTemplate "${1:name}" ${2:.} }}' },
 }
 
 -- Flatten nested template data into dotted paths; tables recurse, arrays and
@@ -119,6 +215,11 @@ end
 
 local action_cache, block_cache
 
+-- Data-key items go stale with `chezmoi data`; called on FocusGained (init.lua)
+function M.invalidate()
+  action_cache = nil
+end
+
 local function item(label, icon_spec, extra)
   local it = { label = label, insertText = label, kind_icon = icon_spec[1], kind_hl = icon_spec[2] }
   for k, v in pairs(extra) do
@@ -144,6 +245,8 @@ local function action_items()
           value = value:sub(1, 200) .. "…"
         end
       end
+      -- lua fence so blink's treesitter docs highlight the value by type
+      -- (true=boolean, 1=number, "x"=string) — needs the markdown_inline parser
       action_cache[#action_cache + 1] = item(e.path, ICON[type(e.value)] or ICON.table, {
         kind = KIND.Variable,
         documentation = { kind = "markdown", value = "```lua\n" .. value .. "\n```" },

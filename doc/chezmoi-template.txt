@@ -41,10 +41,16 @@ change options. With lazy.nvim: >lua
 
   {
     "dpezto/chezmoi-template.nvim",
-    lazy = false, -- autocmds must exist before the first file opens
+    lazy = false, -- keep false; the plugin lazy-loads itself internally
     opts = {},
   }
 <
+`lazy = false`, but startup stays cheap: only filetype detection and light
+triggers register up front; the heavy setup() is deferred until the first
+template opens or a :Chezmoi* command runs. Don't set ft/cmd — the internal
+bootstrap handles lazy-loading, and its filetype registration must run at
+startup.
+
 Without a plugin spec, options can also be set via >lua
 
   vim.g.chezmoi_template = { encryption = { enabled = true } }
@@ -64,11 +70,11 @@ Defaults: >lua
       indent_directives = true,  -- depth-pad column-0 {{- directive blocks
     },
     icons = { enabled = true },  -- mini.icons resolution
-    commands = { enabled = true },
     apply = {
-      on_save = false,           -- chezmoi apply <target> after writing
+      on_save = true,            -- chezmoi apply <target> after writing
       notify = true,             -- notify on successful applies
     },
+    notify_on_open = false,      -- notify when opening a managed source file
     redirect = false,            -- deployed file open -> jump to source
     diagnostics = { enabled = true },
     completion = {
@@ -78,11 +84,7 @@ Defaults: >lua
     picker = nil,                -- "snacks"|"telescope"|"fzf-lua"|"mini"|
                                  -- "select"; nil = auto-detect
     encryption = {
-      enabled = false,
-      engine = "chezmoi",        -- "chezmoi" | "tool"
-      tool = nil,                -- engine="tool": nil = chezmoi's age.command
-      identity = nil,            -- engine="tool": path or function
-      recipients = nil,          -- engine="tool": list/string or function
+      enabled = false,           -- opt-in; delegates to chezmoi decrypt/encrypt
       exclude = {},              -- lua patterns of *.age paths to skip
     },
   })
@@ -102,12 +104,12 @@ whole-line directives so template nesting depth reads as indentation
 Directives with leading indentation (embedded in code layout) keep their
 single space.
 
-                                                  *chezmoi-template-encryption-engines*
-encryption.engine = "chezmoi" delegates to `chezmoi decrypt` / `chezmoi encrypt`:
-identities, recipients, tool choice (age/rage/builtin, even gpg) come from
-chezmoi's own encryption config. "tool" invokes an age-compatible binary
-directly, configured by encryption.tool/identity/recipients (each falls back to
-chezmoi's config).
+                                                  *chezmoi-template-encryption*
+encryption (opt-in) transparently decrypts managed *.age / *.asc files on read
+and re-encrypts on write via `chezmoi decrypt` / `chezmoi encrypt`: identities,
+recipients, tool choice (age/rage/builtin, even gpg) come from chezmoi's own
+encryption config. Decrypted content never touches disk (no swap/undo file).
+encryption.exclude lua patterns leave matching paths as plain binary.
 
 ==============================================================================
 4. COMMANDS                                         *chezmoi-template-commands*
@@ -119,6 +121,7 @@ chezmoi's config).
                                                                  *:ChezmoiDiff*
 :ChezmoiDiff          Diff for the current buffer's target in a split; the
                       whole state when the buffer is not chezmoi-managed.
+                      `q` closes the split.
 
                                                                *:ChezmoiTarget*
 :ChezmoiTarget        Echo the current buffer's deploy target path.
@@ -131,8 +134,12 @@ chezmoi's config).
                                                               *:ChezmoiPreview*
 :ChezmoiPreview       Toggle a vertical split with the rendered template
                       (`chezmoi execute-template`), typed as the target
-                      filetype and re-rendered on every write. NOTE: templates
-                      calling secret managers render real secrets here.
+                      filetype and re-rendered on every write. The preview
+                      buffer is named chezmoi-preview://<target> (a
+                      dot_zshrc.tmpl previews as .zshrc); `q` (or
+                      running the command again) closes it. Refuses
+                      non-template buffers. NOTE: templates calling secret
+                      managers render real secrets here.
 
                                                                  *:ChezmoiPick*
 :ChezmoiPick          File picker over the source directory. Backend from
@@ -144,7 +151,8 @@ chezmoi's config).
 ==============================================================================
 5. COMPLETION                                     *chezmoi-template-completion*
 
-A blink.cmp source for gotmpl buffers. Inside {{ … }} it completes template
+A blink.cmp source for gotmpl buffers (blink.cmp ≥ 0.13 — per-item kind
+icons/highlights). Inside {{ … }} it completes template
 data keys (from `chezmoi data`; kind icons reflect each value's type, docs
 preview the value), template/sprig/chezmoi functions, and Go template
 keywords. Outside actions it completes block snippets (if, ifelse, range,

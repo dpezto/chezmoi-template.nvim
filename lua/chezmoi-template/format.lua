@@ -9,8 +9,18 @@ local M = {}
 
 M.formatter = {
   format = function(_, ctx, lines, callback)
+    -- Normally seeded on BufReadPre; a new/unseeded buffer (BufNewFile,
+    -- lazy-load) has none, so resolve the target filetype from the name here.
     local target_ft = vim.b[ctx.buf].chezmoi_target_ft
-    if not target_ft then
+    if not target_ft or target_ft == "" then
+      local name = vim.api.nvim_buf_get_name(ctx.buf)
+      if name ~= "" then
+        local resolve = require("chezmoi-template.resolve")
+        local target = resolve.target_path(name) or resolve.resolve_path(vim.fn.fnamemodify(name, ":t"))
+        target_ft = resolve.target_ft(target)
+      end
+    end
+    if not target_ft or target_ft == "" or target_ft == "gotmpl" then
       return callback(nil, lines)
     end
 

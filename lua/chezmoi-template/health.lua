@@ -19,6 +19,17 @@ function M.check()
     health.error("gotmpl treesitter parser missing", "Install it, e.g. via nvim-treesitter: :TSInstall gotmpl")
   end
 
+  -- blink completion docs are fenced code blocks; without markdown_inline they
+  -- render as literal ``` and the value's type isn't highlighted
+  if pcall(vim.treesitter.language.add, "markdown_inline") then
+    health.ok("markdown_inline parser installed (highlighted completion docs)")
+  else
+    health.warn(
+      "markdown_inline treesitter parser missing",
+      "blink.cmp completion docs show raw ``` fences; install it, e.g. :TSInstall markdown markdown_inline"
+    )
+  end
+
   local config = require("chezmoi-template").config
 
   if config.format.enabled then
@@ -30,19 +41,10 @@ function M.check()
   end
 
   if config.encryption.enabled then
-    if config.encryption.engine == "chezmoi" then
-      if vim.fn.executable("chezmoi") == 1 then
-        health.ok("encryption engine: chezmoi (decrypt/encrypt delegated to chezmoi's encryption config)")
-      else
-        health.error("encryption engine is 'chezmoi' but the chezmoi executable is missing")
-      end
+    if vim.fn.executable("chezmoi") == 1 then
+      health.ok("encryption enabled (decrypt/encrypt delegated to chezmoi's encryption config)")
     else
-      local tool = require("chezmoi-template.encryption").tool()
-      if vim.fn.executable(tool) == 1 then
-        health.ok(("encryption engine: tool '%s'"):format(tool))
-      else
-        health.error(("encryption tool '%s' not found"):format(tool))
-      end
+      health.error("encryption is enabled but the chezmoi executable is missing")
     end
   end
 end

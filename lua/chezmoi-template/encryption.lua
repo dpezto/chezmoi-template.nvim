@@ -1,12 +1,8 @@
 -- Transparent editing of chezmoi-managed encrypted files (*.age, *.asc):
 -- decrypt on read, re-encrypt on write. Opt-in (config.encryption.enabled).
---
--- engine = "chezmoi" (default): `chezmoi decrypt` / `chezmoi encrypt` —
---   identities, recipients, tool choice, even gpg all come from chezmoi's own
---   encryption config.
--- engine = "tool": invoke an age-compatible binary directly. Resolution order
---   for tool/identity/recipients: explicit config (string/list or function),
---   then chezmoi's encryption config via `chezmoi dump-config`.
+-- Delegates to `chezmoi decrypt` / `chezmoi encrypt`, so identities, recipients,
+-- and tool choice (age/rage/builtin, even gpg) all come from chezmoi's own
+-- encryption config — anyone editing encrypted managed files already has it set.
 local M = {}
 
 local resolve = require("chezmoi-template.resolve")
@@ -15,127 +11,32 @@ local function cfg()
   return require("chezmoi-template").config.encryption
 end
 
-local dump_cache = "unset"
-
--- The [age] section of the active chezmoi config (identity, recipient(s), …)
-local function chezmoi_age_config()
-  if dump_cache == "unset" then
-    dump_cache = false
-    if resolve.has_chezmoi() then
-      local ret = vim.system({ "chezmoi", "dump-config", "--format=json" }, { text = true }):wait()
-      if ret.code == 0 then
-        local ok, decoded = pcall(vim.json.decode, ret.stdout)
-        if ok and type(decoded) == "table" then
-          dump_cache = decoded.age or false
-        end
-      end
-    end
-  end
-  return dump_cache or nil
-end
-
-local function resolve_identity()
-  local id = cfg().identity
-  if type(id) == "function" then
-    id = id()
-  end
-  if id and id ~= "" then
-    return vim.fn.expand(id)
-  end
-  local age = chezmoi_age_config()
-  if age then
-    if age.identity and age.identity ~= "" then
-      return vim.fn.expand(age.identity)
-    end
-    if type(age.identities) == "table" and age.identities[1] then
-      return vim.fn.expand(age.identities[1])
-    end
-  end
-end
-
-local function resolve_tool()
-  local tool = cfg().tool
-  if tool and tool ~= "" then
-    return tool
-  end
-  local age = chezmoi_age_config()
-  if age and age.command and age.command ~= "" then
-    return age.command
-  end
-  return "age"
-end
-
--- Exposed for :checkhealth
-function M.tool()
-  return resolve_tool()
-end
-
-local function resolve_recipients()
-  local r = cfg().recipients
-  if type(r) == "function" then
-    r = r()
-  end
-  if type(r) == "string" then
-    r = { r }
-  end
-  if type(r) == "table" and #r > 0 then
-    return r
-  end
-  local age = chezmoi_age_config()
-  if age then
-    local out = {}
-    if age.recipient and age.recipient ~= "" then
-      out[#out + 1] = age.recipient
-    end
-    for _, v in ipairs(age.recipients or {}) do
-      out[#out + 1] = v
-    end
-    if #out > 0 then
-      return out
-    end
-  end
-end
-
 local function decrypt(file)
-  if cfg().engine == "chezmoi" then
-    return vim.system({ "chezmoi", "decrypt", file }, { text = true }):wait()
-  end
-  local identity = resolve_identity()
-  if not identity then
-    return { code = 1, stderr = "no age identity (set config.encryption.identity)" }
-  end
-  return vim.system({ resolve_tool(), "--decrypt", "-i", identity, file }, { text = true }):wait()
+  return vim.system({ "chezmoi", "decrypt", file }, { text = true }):wait()
 end
 
 local function encrypt(text, file)
-  if cfg().engine == "chezmoi" then
-    local ret = vim.system({ "chezmoi", "encrypt" }, { stdin = text }):wait()
-    if ret.code == 0 then
-      local out = io.open(file, "wb")
-      if not out then
-        return { code = 1, stderr = "cannot open " .. file .. " for writing" }
-      end
-      out:write(ret.stdout)
-      out:close()
+  local ret = vim.system({ "chezmoi", "encrypt" }, { stdin = text }):wait()
+  if ret.code == 0 then
+    local out = io.open(file, "wb")
+    if not out then
+      return { code = 1, stderr = "cannot open " .. file .. " for writing" }
     end
-    return ret
+    -- A failed write (disk full, I/O error) must not report success — the
+    -- buffer would be marked unmodified with the file unwritten.
+    local wok, werr = out:write(ret.stdout)
+    local cok = out:close()
+    if not wok or not cok then
+      return { code = 1, stderr = "failed writing " .. file .. (werr and ": " .. werr or "") }
+    end
   end
-  local recipients = resolve_recipients()
-  if not recipients then
-    return { code = 1, stderr = "no age recipients (set config.encryption.recipients)" }
-  end
-  local cmd = { resolve_tool(), "--encrypt", "--armor" }
-  for _, r in ipairs(recipients) do
-    vim.list_extend(cmd, { "-r", r })
-  end
-  vim.list_extend(cmd, { "-o", file })
-  return vim.system(cmd, { stdin = text }):wait()
+  return ret
 end
 
 local function read_post(args)
   local ret = decrypt(args.file)
   if ret.code ~= 0 then
-    vim.notify("chezmoi-template: decryption failed:\n" .. (ret.stderr or ""), vim.log.levels.ERROR)
+    vim.notify("decryption failed:\n" .. (ret.stderr or ""), vim.log.levels.ERROR, { title = "chezmoi" })
     return
   end
 
@@ -176,7 +77,7 @@ local function write_cmd(args)
     vim.bo[args.buf].modified = false
     vim.api.nvim_exec_autocmds("BufWritePost", { buffer = args.buf, modeline = false })
   else
-    vim.notify("chezmoi-template: error saving file:\n" .. (ret.stderr or ""), vim.log.levels.ERROR)
+    vim.notify("error saving file:\n" .. (ret.stderr or ""), vim.log.levels.ERROR, { title = "chezmoi" })
   end
 end
 

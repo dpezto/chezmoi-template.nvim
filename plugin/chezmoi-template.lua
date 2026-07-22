@@ -1,5 +1,7 @@
--- Zero-config bootstrap: works without a setup() call. A later explicit
--- setup({...}) (e.g. lazy.nvim `opts`) re-runs cleanly and wins.
+-- Zero-config bootstrap: works without a setup() call. setup() is cheap — it
+-- registers filetype detection, the treesitter directive, and light triggers,
+-- deferring the heavy work until the first template opens or a :Chezmoi* command
+-- runs. A later explicit setup({...}) (e.g. lazy.nvim `opts`) re-merges and wins.
 if vim.g.loaded_chezmoi_template then
   return
 end

@@ -8,9 +8,13 @@ local function augroup(name)
   return vim.api.nvim_create_augroup("chezmoi-template." .. name, { clear = true })
 end
 
-function M.setup()
-  -- The (text) nodes of a gotmpl tree carry the target file's content; this
-  -- directive tells treesitter which language to parse them as.
+-- The (text) nodes of a gotmpl tree carry the target file's content; this
+-- directive tells treesitter which language to parse them as. It must be
+-- registered before any gotmpl tree is parsed (highlighting, vim-matchup,
+-- render-markdown, …), so the plugin/ bootstrap registers it at startup —
+-- treesitter errors "No handler for inject-chezmoi!" otherwise. Registration is
+-- cheap; the callback only touches `resolve` when a tree is actually parsed.
+function M.register_directive()
   vim.treesitter.query.add_directive("inject-chezmoi!", function(_, _, source, _, metadata)
     local bufnr = type(source) == "number" and source or vim.api.nvim_get_current_buf()
     if vim.b[bufnr] and vim.b[bufnr].chezmoi_target_lang then
@@ -33,6 +37,38 @@ function M.setup()
       end
     end
   end, { force = true })
+end
+
+-- Seed a buffer's chezmoi_target_lang from its source path. Callable directly
+-- (the lazy bootstrap uses it for the buffer that triggered loading, whose
+-- BufReadPre has already passed) or from the BufReadPre autocmd below.
+function M.seed_buffer(buf, file)
+  if not resolve.is_managed(file) then
+    return
+  end
+  -- No deploy target (.chezmoitemplates/ partials, .chezmoiscripts/):
+  -- infer from the attribute-stripped basename (run_once_foo.sh.tmpl -> foo.sh).
+  -- The prefetched source set (one spawn per session) skips the doomed
+  -- per-file `target-path` spawn for exactly those files.
+  local sset = resolve.source_set()
+  local fallback = resolve.resolve_path(vim.fn.fnamemodify(file, ":t"))
+  local target
+  if sset and not sset[vim.fs.normalize(vim.fn.fnamemodify(file, ":p"))] then
+    target = fallback
+  else
+    target = resolve.target_path(file) or fallback
+  end
+  local ft
+  if target:match("^%.chezmoiignore") or target:match("^%.chezmoiremove") then
+    ft = "gitignore"
+  else
+    ft = resolve.target_ft(target)
+  end
+  resolve.seed(buf, ft)
+end
+
+function M.setup()
+  M.register_directive()
 
   -- Detect target language for *.tmpl files BEFORE FileType/TS sets up.
   -- BufReadPre fires synchronously before the file is read and before TS
@@ -41,20 +77,7 @@ function M.setup()
     group = augroup("tmpl"),
     pattern = { "*.tmpl", ".chezmoiignore*", ".chezmoiremove*", ".chezmoiexternal*" },
     callback = function(ctx)
-      if not resolve.is_managed(ctx.file) then
-        return
-      end
-      -- No deploy target (.chezmoitemplates/ partials, .chezmoiscripts/):
-      -- infer from the attribute-stripped basename (run_once_foo.sh.tmpl -> foo.sh)
-      local target = resolve.target_path(ctx.file)
-        or resolve.resolve_path(vim.fn.fnamemodify(ctx.file, ":t"))
-      local ft
-      if target:match("^%.chezmoiignore") or target:match("^%.chezmoiremove") then
-        ft = "gitignore"
-      else
-        ft = resolve.target_ft(target)
-      end
-      resolve.seed(ctx.buf, ft)
+      M.seed_buffer(ctx.buf, ctx.file)
     end,
   })
 
