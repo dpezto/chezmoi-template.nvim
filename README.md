@@ -1,10 +1,31 @@
 # chezmoi-template.nvim
 
+[![CI](https://github.com/dpezto/chezmoi-template.nvim/actions/workflows/ci.yml/badge.svg)](https://github.com/dpezto/chezmoi-template.nvim/actions/workflows/ci.yml)
+[![Coverage Status](https://coveralls.io/repos/github/dpezto/chezmoi-template.nvim/badge.svg?branch=main)](https://coveralls.io/github/dpezto/chezmoi-template.nvim?branch=main)
+
 Edit your [chezmoi](https://chezmoi.io) source files **natively** — and make Neovim understand them.
 
-![Editing dot_zshrc.tmpl: Go-template and zsh highlighting simultaneously](assets/injection.gif)
-
 Most chezmoi integrations wrap the `chezmoi edit` CLI: temporary buffers, watchers, apply-on-save. This plugin takes the opposite approach: you open the real source files (in `~/.local/share/chezmoi`, under git, with your normal workflow), and the editor becomes chezmoi-aware:
+
+<!--toc:start-->
+
+- [chezmoi-template.nvim](#chezmoi-templatenvim)
+  - [Requirements](#requirements)
+  - [Installation](#installation)
+  - [Configuration](#configuration)
+    - [Formatting](#formatting)
+    - [Icons](#icons)
+    - [Encryption](#encryption)
+  - [Completion](#completion)
+  - [Picker](#picker)
+  - [Secrets](#secrets)
+  - [vs. chezmoi.nvim / chezmoi.vim / the LazyVim extra](#vs-chezmoinvim-chezmoivim-the-lazyvim-extra)
+  - [Health](#health)
+  - [Development](#development)
+
+<!--toc:end-->
+
+![Editing dot_zshrc.tmpl: Go-template and zsh highlighting simultaneously](assets/injection.gif)
 
 - **Real highlighting inside templates.** A `dot_zshrc.tmpl` is a `gotmpl` buffer whose text is treesitter-injected as **zsh** — Go-template syntax _and_ target-language syntax, simultaneously. Works for any target language with a treesitter parser, resolved via `chezmoi target-path`. Includes `.chezmoitemplates/` partials, `.chezmoiignore` / `.chezmoiremove` / `.chezmoiexternal.*`.
 - **Format templates as their target filetype** ([conform.nvim](https://github.com/stevearc/conform.nvim)). Go-template spans are masked with structurally inert placeholders, the buffer is formatted with the target filetype's formatter (shfmt, biome, taplo, …), then the spans are restored — with `{{ end }}` / `{{ else }}` re-indented to pair with their opener, and column-0 `{{-` directive blocks getting depth-encoding interior padding:
