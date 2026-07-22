@@ -17,8 +17,13 @@ function M.resolve_path(name)
   -- drive/UNC matches can't hit a normal Unix path (those begin with "/"), so
   -- this needs no has("win32") gate and stays exercised on the Linux/macOS CI.
   name = vim.fs.normalize(name)
+  -- The prefix must end in "/" so `prefix .. concat(parts, "/")` keeps the
+  -- separator (gmatch drops the leading slash of the remainder). "C:/" and "/"
+  -- already do; the UNC root is captured with its trailing slash for the same
+  -- reason (a bare "//server/share" with no file under it is not a real source
+  -- path — source_dir always has a trailing slash).
   local prefix = name:match("^%a:/") -- C:/…
-    or name:match("^//[^/]+/[^/]+") -- //server/share (UNC root)
+    or name:match("^//[^/]+/[^/]+/") -- //server/share/ (UNC root)
     or (name:sub(1, 1) == "/" and "/") -- POSIX root
     or ""
   local parts = {}
