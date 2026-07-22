@@ -1,0 +1,48 @@
+name: Bug report
+description: Something broke
+labels: [bug]
+body:
+  - type: input
+    id: nvim
+    attributes:
+      label: Neovim version
+      placeholder: "NVIM v0.11.2 (nvim --version)"
+    validations:
+      required: true
+  - type: input
+    id: chezmoi
+    attributes:
+      label: chezmoi version
+      placeholder: "chezmoi version v2.71.0 (or 'not installed')"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: "macOS 15 / Ubuntu 24.04 / Windows 11"
+    validations:
+      required: true
+  - type: textarea
+    id: health
+    attributes:
+      label: ":checkhealth chezmoi-template output"
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: >
+        Smallest chezmoi source layout + file that triggers it, e.g. "source dir
+        containing dot_zshrc.tmpl with {{ if }} block, open it, then …".
+        Relevant non-default plugin config if any.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected vs actual behavior
+    validations:
+      required: true

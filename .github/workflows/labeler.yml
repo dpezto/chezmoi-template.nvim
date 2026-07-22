@@ -1,0 +1,23 @@
+name: labeler
+
+on: [pull_request_target]
+
+jobs:
+  size:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: codelytv/pr-size-labeler@v1
+        with:
+          xs_label: "size/xs"
+          xs_max_size: "3"
+          s_label: "size/s"
+          s_max_size: "10"
+          m_label: "size/m"
+          m_max_size: "50"
+          l_label: "size/l"
+          l_max_size: "100"
+          xl_label: "size/xl"
+          fail_if_xl: "false"

@@ -83,14 +83,14 @@ end)
 -- 3. json target: comment placeholders must be // (jsonc path)
 run_case("json whole-line directive", "json", {
   "{",
-  '{{- if .work }}',
+  "{{- if .work }}",
   '  "email": {{ .work_email | quote }},',
   "{{- end }}",
   '  "name": "x"',
   "}",
 }, {
   "{",
-  '{{- if .work }}',
+  "{{- if .work }}",
   '  "email": {{ .work_email | quote }},',
   "{{- end }}",
   '  "name": "x"',
@@ -141,23 +141,23 @@ run_case("sentinel collision", "sh", {
 run_case("directive indent depths", "sh", {
   "{{- $os := .chezmoi.os }}",
   "{{- range $name, $spec := .apps }}",
-  "{{- $roles := get $spec \"role\" }}",
-  "{{- if kindIs \"string\" $roles }}{{ $roles = list $roles }}{{ end }}",
+  '{{- $roles := get $spec "role" }}',
+  '{{- if kindIs "string" $roles }}{{ $roles = list $roles }}{{ end }}',
   "{{- if .ok }}",
-  "{{- $via := get $spec \"via\" }}",
+  '{{- $via := get $spec "via" }}',
   "{{- else if .other }}",
-  "{{- $via := \"apt\" }}",
+  '{{- $via := "apt" }}',
   "{{- end }}",
   "{{- end }}",
 }, {
   "{{- $os := .chezmoi.os }}",
   "{{- range $name, $spec := .apps }}",
-  "{{-   $roles := get $spec \"role\" }}",
-  "{{-   if kindIs \"string\" $roles }}{{ $roles = list $roles }}{{ end }}",
+  '{{-   $roles := get $spec "role" }}',
+  '{{-   if kindIs "string" $roles }}{{ $roles = list $roles }}{{ end }}',
   "{{-   if .ok }}",
-  "{{-     $via := get $spec \"via\" }}",
+  '{{-     $via := get $spec "via" }}',
   "{{-   else if .other }}",
-  "{{-     $via := \"apt\" }}",
+  '{{-     $via := "apt" }}',
   "{{-   end }}",
   "{{- end }}",
 })
@@ -251,15 +251,41 @@ eq("blink mask secretish keys", {
   blink.masked(".work.api_url"),
 }, { true, false, false, true })
 
+eq("blink flatten", blink.flatten({ chezmoi = { hostname = "k", os = "darwin" }, roles = { "base" } }), {
+  { path = ".chezmoi.hostname", value = "k" },
+  { path = ".chezmoi.os", value = "darwin" },
+  { path = ".roles", value = { "base" } },
+})
+
+local resolve = require("chezmoi-template.resolve")
+eq("resolve_path attributes", resolve.resolve_path("private_dot_zshrc.tmpl"), ".zshrc")
 eq(
-  "blink flatten",
-  blink.flatten({ chezmoi = { hostname = "k", os = "darwin" }, roles = { "base" } }),
-  {
-    { path = ".chezmoi.hostname", value = "k" },
-    { path = ".chezmoi.os", value = "darwin" },
-    { path = ".roles", value = { "base" } },
-  }
+  "resolve_path nested + encrypted",
+  resolve.resolve_path("/src/exact_dot_config/encrypted_private_secrets.json.age"),
+  "/src/.config/secrets.json"
 )
+eq("resolve_path relative stays relative", resolve.resolve_path("dot_config/foo.toml.tmpl"), ".config/foo.toml")
+eq("invalidate clears without error", pcall(resolve.invalidate), true)
+
+-- formatter resolves target ft from the buffer name when unseeded (BufNewFile)
+do
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(buf, "/tmp/chezmoi-src/dot_profile.tmpl") -- -> .profile -> sh
+  local done
+  format.formatter.format(nil, { buf = buf }, { "{{- if .x }}", "echo hi", "{{- end }}" }, function()
+    done = true
+  end)
+  vim.wait(5000, function()
+    return done
+  end)
+  local masked = false
+  for _, l in ipairs(_G.captured_masked or {}) do
+    if l:match("^#%s*CHEZMOI_TMPL_") then
+      masked = true
+    end
+  end
+  eq("format resolves ft from name when unseeded", masked, true)
+end
 
 if failures > 0 then
   error(failures .. " test case(s) failed")
