@@ -12,7 +12,10 @@ local function cfg()
 end
 
 local function decrypt(file)
-  return vim.system({ "chezmoi", "decrypt", file }, { text = true }):wait()
+  -- No text=true: decode raw bytes so line endings (and any binary payload)
+  -- round-trip byte-for-byte, symmetric with encrypt() below. text=true would
+  -- strip CR from a CRLF config and silently rewrite it to LF on save.
+  return vim.system({ "chezmoi", "decrypt", file }):wait()
 end
 
 local function encrypt(text, file)
@@ -90,9 +93,12 @@ function M.setup()
     pattern = { "*.age", "*.asc" },
     callback = function(ctx)
       -- Excluded paths (e.g. passphrase-encrypted bootstrap keys) and files
-      -- outside the source dir open as plain binary.
+      -- outside the source dir open as plain binary. Match the normalized
+      -- (forward-slash) path so patterns are portable — a raw autocmd path is
+      -- backslashed on Windows and would dodge "/"-style patterns.
+      local nfile = vim.fs.normalize(ctx.file)
       for _, pat in ipairs(cfg().exclude) do
-        if ctx.file:match(pat) then
+        if nfile:match(pat) then
           return
         end
       end

@@ -304,6 +304,21 @@ eq(
   "/src/.config/secrets.json"
 )
 eq("resolve_path relative stays relative", resolve.resolve_path("dot_config/foo.toml.tmpl"), ".config/foo.toml")
+-- A drive-letter root is preserved as a prefix, not attribute-stripped. This
+-- runs on every OS: "C:/" survives vim.fs.normalize unchanged, and `^%a:/`
+-- can't match a normal Unix path, so the branch needs no has("win32") gate.
+eq("resolve_path drive-letter root", resolve.resolve_path("C:/src/private_dot_zshrc.tmpl"), "C:/src/.zshrc")
+-- Backslash normalization and UNC-root preservation depend on vim.fs.normalize's
+-- Windows behavior (converts `\`→`/`, keeps `//server/share`); off-Windows it
+-- neither converts backslashes nor keeps `//`. Verified on the Windows CI leg.
+if vim.fn.has("win32") == 1 then
+  eq("resolve_path backslashes normalize", resolve.resolve_path("C:\\src\\dot_zshrc.tmpl"), "C:/src/.zshrc")
+  eq(
+    "resolve_path UNC root preserved",
+    resolve.resolve_path("\\\\server\\share\\dot_config\\foo.toml.tmpl"),
+    "//server/share/.config/foo.toml"
+  )
+end
 eq("resolve_path symlink_", resolve.resolve_path("symlink_dot_foo"), ".foo")
 eq("resolve_path create_", resolve.resolve_path("create_dot_bar"), ".bar")
 eq("resolve_path modify_", resolve.resolve_path("modify_dot_baz.tmpl"), ".baz")
@@ -338,7 +353,13 @@ end
 -- Everything below exercises real plugin behavior (autocmds, user commands,
 -- buffers) without the chezmoi binary.
 
-local SRC = vim.fn.getcwd() .. "/tests" -- source_dir configured in minimal_init
+local SRC = vim.fs.normalize(vim.fn.getcwd()) .. "/tests" -- source_dir configured in minimal_init
+
+-- buffer name normalized to forward slashes: nvim_buf_get_name may return
+-- backslashes on Windows, but SRC and every resolve.lua path use "/"
+local function bufname(buf)
+  return vim.fs.normalize(vim.api.nvim_buf_get_name(buf or 0))
+end
 
 local fake = {} -- subcommand -> canned vim.system result
 local spawns = {} -- subcommand -> call count
@@ -590,7 +611,7 @@ end
 do
   -- deployed path outside the source dir; under cwd so no symlink resolution
   -- (nvim_buf_set_name resolves /tmp -> /private/tmp on macOS)
-  local deployed = vim.fn.getcwd() .. "/chezmoi-test-deployed"
+  local deployed = vim.fs.normalize(vim.fn.getcwd()) .. "/chezmoi-test-deployed"
   fake["managed"] = { code = 0, stdout = deployed .. "\n" }
   resolve.invalidate()
   fake["source-path"] = { code = 0, stdout = SRC .. "/dot_chezmoi-test-deployed\n" }
@@ -624,7 +645,7 @@ do
     cb(items[1])
   end
   vim.cmd("Chezmoi pick")
-  eq("select backend edits the picked source file", vim.api.nvim_buf_get_name(0), SRC .. "/dot_pick_me.tmpl")
+  eq("select backend edits the picked source file", bufname(), SRC .. "/dot_pick_me.tmpl")
   vim.ui.select = real_select
 
   clear_notes()
@@ -800,18 +821,22 @@ end
 do
   fake["source-path"] = { code = 0, stdout = SRC .. "/dot_gitconfig.tmpl\n" }
   ct.edit("~/.gitconfig")
-  eq("edit opens the resolved source", vim.api.nvim_buf_get_name(0), SRC .. "/dot_gitconfig.tmpl")
+  eq("edit opens the resolved source", bufname(), SRC .. "/dot_gitconfig.tmpl")
 end
 
--- inject.exclude leaves matching source paths as plain gotmpl (no target lang)
+-- inject.exclude leaves matching source paths as plain gotmpl (no target lang).
+-- The match runs on the normalized (forward-slash) path, so a "/"-separator
+-- pattern is portable — on Windows seed_buffer normalizes the backslash path
+-- before matching (that OS-specific leg is verified by the Windows CI run).
 do
   fake["managed"] = { code = 0, stdout = "" } -- empty set -> name-based ft fallback
   resolve.invalidate()
-  ct.config.inject.exclude = { "excluded%.json%.tmpl" }
+  ct.config.inject.exclude = { "dot_config/excluded" } -- pattern spans a "/"
   local xb = vim.api.nvim_create_buf(false, true)
-  require("chezmoi-template.inject").seed_buffer(xb, SRC .. "/dot_excluded.json.tmpl")
-  eq("inject.exclude skips target injection", vim.b[xb].chezmoi_target_lang, nil)
-  eq("inject.exclude skips target ft", vim.b[xb].chezmoi_target_ft, nil)
+  require("chezmoi-template.inject").seed_buffer(xb, SRC .. "/private_dot_config/excluded.json.tmpl")
+  eq("inject.exclude '/'-pattern skips injection", vim.b[xb].chezmoi_target_lang, nil)
+  eq("inject.exclude '/'-pattern skips ft", vim.b[xb].chezmoi_target_ft, nil)
+  ct.config.inject.exclude = { "excluded%.json%.tmpl" } -- basename pattern still works
   local yb = vim.api.nvim_create_buf(false, true)
   require("chezmoi-template.inject").seed_buffer(yb, SRC .. "/dot_included.json.tmpl")
   eq("non-excluded still seeds target ft", vim.b[yb].chezmoi_target_ft, "json")
