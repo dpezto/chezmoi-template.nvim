@@ -16,7 +16,7 @@ M.config = {
   icons = { enabled = true },
   -- run `chezmoi apply <target>` after writing a managed source file
   apply = { on_save = true, notify = true },
-  -- :ChezmoiPreview rendered preview. live = re-render as you type (debounced,
+  -- :Chezmoi preview rendered preview. live = re-render as you type (debounced,
   -- ms); false = re-render on write only. Invalid syntax keeps the last valid
   -- render until it parses again. slow_ms: if a render takes longer than this,
   -- live pauses to on-write (guards heavy secret-manager templates); 0 disables.
@@ -32,7 +32,7 @@ M.config = {
     -- hide values of data keys matching these lua patterns in completion docs
     mask = { "secret", "token", "passw", "key", "api" },
   },
-  -- :ChezmoiPick backend: "snacks" | "telescope" | "fzf-lua" | "mini" | "select";
+  -- :Chezmoi pick backend: "snacks" | "telescope" | "fzf-lua" | "mini" | "select";
   -- nil = auto-detect among loaded pickers, falling back to vim.ui.select
   picker = nil,
   -- transparent decrypt/encrypt of chezmoi-managed encrypted files (*.age, *.asc)
@@ -44,12 +44,14 @@ M.config = {
   },
 }
 
-local COMMANDS = { "ChezmoiApply", "ChezmoiDiff", "ChezmoiTarget", "ChezmoiSource", "ChezmoiPreview", "ChezmoiPick" }
+-- Static subcommand names for pre-activation tab-completion; the real command
+-- (commands.lua) derives its own from the handler table. Kept in sync by hand.
+local SUBCOMMANDS = { "apply", "diff", "pick", "preview", "source", "target" }
 
 -- setup() is cheap: it only registers filetype detection, the treesitter
 -- injection directive, and light triggers. The heavy work (module requires,
 -- autocmds) is deferred to M._activate(), fired by the first template open or
--- :Chezmoi* command — so startup stays cheap whether the plugin is loaded via
+-- :Chezmoi command — so startup stays cheap whether the plugin is loaded via
 -- the plugin/ bootstrap or an eager setup(opts) from a lazy.nvim spec.
 function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", M.config, opts or {})
@@ -101,12 +103,19 @@ function M._register()
       M._activate()
     end,
   })
-  for _, name in ipairs(COMMANDS) do
-    vim.api.nvim_create_user_command(name, function(a)
-      M._activate() -- replaces this stub with the real command
-      vim.cmd(("%s%s %s"):format(name, a.bang and "!" or "", a.args))
-    end, { bang = true, nargs = "*", desc = "chezmoi-template (loads on first use)" })
-  end
+  vim.api.nvim_create_user_command("Chezmoi", function(a)
+    M._activate() -- replaces this stub with the real command
+    vim.cmd(("Chezmoi%s %s"):format(a.bang and "!" or "", a.args))
+  end, {
+    bang = true,
+    nargs = "*",
+    desc = "chezmoi-template (loads on first use)",
+    complete = function(arglead)
+      return vim.tbl_filter(function(n)
+        return n:find(arglead, 1, true) == 1
+      end, SUBCOMMANDS)
+    end,
+  })
 end
 
 function M._activate()

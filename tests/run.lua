@@ -205,43 +205,82 @@ eq("diagnostics parse positionless", diagnostics.parse("chezmoi: some other fail
 
 local blink = require("chezmoi-template.blink")
 
--- context-aware completions: snippets outside {{ }}, symbols inside
+-- context-aware completions. No gotmpl parser in this env, so ts_where() returns
+-- nil and the in_action() line regex drives in/out; after_dot() drives
+-- field-vs-command. Probe positional narrowing with the static `includeTemplate`
+-- function (data_items is empty here — fake `chezmoi data` isn't wired up yet).
 do
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_current_buf(buf)
   vim.bo[buf].filetype = "gotmpl"
   local src = blink.new()
 
-  local function labels_at(line, col)
+  local function scan(line, col)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, { line })
     vim.api.nvim_win_set_cursor(0, { 1, col })
-    local got
+    local items
     src:get_completions(nil, function(res)
-      got = res.items
+      items = res.items
     end)
-    return got
+    local has_if_snippet, has_fn, has_snippet = false, false, false
+    for _, it in ipairs(items) do
+      if it.insertTextFormat == 2 then
+        has_snippet = true
+      end
+      if it.label == "if" and it.insertTextFormat == 2 and it.insertText:find("{{- end }}", 1, true) then
+        has_if_snippet = true
+      end
+      if it.label == "includeTemplate" then
+        has_fn = true
+      end
+    end
+    return { snippet = has_if_snippet, fn = has_fn, any_snippet = has_snippet }
   end
 
-  local outside = labels_at("", 0)
-  local has_if_snippet, has_fn = false, false
-  for _, it in ipairs(outside) do
-    if it.label == "if" and it.insertTextFormat == 2 and it.insertText:find("{{- end }}", 1, true) then
-      has_if_snippet = true
-    end
-  end
-  eq("blink outside {{ }} offers block snippets", has_if_snippet, true)
+  -- outside any action: block snippets, no functions
+  eq("blink outside {{ }} offers block snippets", scan("", 0).snippet, true)
 
-  local inside = labels_at("{{ .che }}", 7)
-  local has_snippet = false
-  for _, it in ipairs(inside) do
-    if it.insertTextFormat == 2 then
-      has_snippet = true
+  -- command position (no leading dot): functions offered, no snippets
+  local cmd = scan("{{ inclu }}", 8)
+  eq("blink command position offers functions, no snippets", { cmd.fn, cmd.any_snippet }, { true, false })
+
+  -- field position (after a dot): data keys only — functions absent, no snippets
+  local field = scan("{{ .che }}", 7)
+  eq("blink field position offers no functions/snippets", { field.fn, field.any_snippet }, { false, false })
+
+  -- treesitter-only cases (skipped in CI where the gotmpl parser is absent):
+  -- multiline actions the line regex can't see, and string-literal suppression.
+  local ok_parser, parser = pcall(vim.treesitter.get_parser, buf, "gotmpl")
+  if ok_parser and parser then
+    -- action spans two lines; cursor is on line 2 after `.che`. The single-line
+    -- regex would read this as outside an action (block snippets); treesitter
+    -- correctly sees field position.
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "{{", ".che", "}}" })
+    vim.api.nvim_win_set_cursor(0, { 2, 4 })
+    local ml
+    src:get_completions(nil, function(res)
+      ml = res.items
+    end)
+    local ml_fn, ml_snip = false, false
+    for _, it in ipairs(ml) do
+      if it.label == "includeTemplate" then
+        ml_fn = true
+      end
+      if it.insertTextFormat == 2 then
+        ml_snip = true
+      end
     end
-    if it.label == "includeTemplate" then
-      has_fn = true
-    end
+    eq("blink multiline action is field position", { ml_fn, ml_snip }, { false, false })
+
+    -- cursor inside a string literal: no completions dumped
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { '{{ template "na" }}' })
+    vim.api.nvim_win_set_cursor(0, { 1, 14 })
+    local instr
+    src:get_completions(nil, function(res)
+      instr = res.items
+    end)
+    eq("blink suppresses completion inside string literals", #instr, 0)
   end
-  eq("blink inside {{ }} offers symbols, no snippets", { has_fn, has_snippet }, { true, false })
 end
 
 eq("blink mask secretish keys", {
@@ -420,22 +459,22 @@ require("chezmoi-template.encryption").setup()
 -- FocusGained drops stale caches
 vim.api.nvim_exec_autocmds("FocusGained", {})
 
--- :ChezmoiTarget notifies the deploy target
+-- :Chezmoi target notifies the deploy target
 local tb = vim.api.nvim_create_buf(true, false)
 vim.api.nvim_buf_set_name(tb, SRC .. "/dot_zshrc.tmpl")
 vim.api.nvim_set_current_buf(tb)
 clear_notes()
-vim.cmd.ChezmoiTarget()
-eq("ChezmoiTarget notifies target path", has_note(".zshrc"), true)
+vim.cmd("Chezmoi target")
+eq("Chezmoi target notifies target path", has_note(".zshrc"), true)
 
--- :ChezmoiApply applies the buffer target and notifies
+-- :Chezmoi apply applies the buffer target and notifies
 fake["apply"] = { code = 0, stdout = "" }
 clear_notes()
-vim.cmd.ChezmoiApply()
+vim.cmd("Chezmoi apply")
 vim.wait(1000, function()
   return has_note("applied")
 end)
-eq("ChezmoiApply notifies applied target", has_note("applied"), true)
+eq("Chezmoi apply notifies applied target", has_note("applied"), true)
 
 -- apply-on-save + diagnostics on BufWritePost (template error -> diagnostic)
 vim.bo[tb].filetype = "gotmpl"
@@ -462,13 +501,13 @@ clear_notes()
 vim.api.nvim_exec_autocmds("BufReadPost", { buffer = tb })
 eq("notify_on_open fires only once", has_note("applies on save"), false)
 
--- :ChezmoiPreview renders into a split, re-renders live as you type, keeps the
+-- :Chezmoi preview renders into a split, re-renders live as you type, keeps the
 -- last valid render on error, toggles closed
 do
   resolve.seed(tb, "zsh")
   fake["execute-template"] = { code = 0, stdout = "rendered ok\n" }
   vim.api.nvim_set_current_buf(tb)
-  vim.cmd.ChezmoiPreview()
+  vim.cmd("Chezmoi preview")
   local dest
   vim.wait(1000, function()
     for _, b in ipairs(vim.api.nvim_list_bufs()) do
@@ -512,20 +551,20 @@ do
   eq("preview keeps last valid render on error", vim.api.nvim_buf_get_lines(dest, 0, -1, false), { "re-rendered" })
 
   vim.api.nvim_set_current_buf(tb)
-  vim.cmd.ChezmoiPreview()
+  vim.cmd("Chezmoi preview")
   eq("preview toggles closed", vim.api.nvim_buf_is_valid(dest), false)
 
   clear_notes()
   local plain = vim.api.nvim_create_buf(true, false)
   vim.api.nvim_set_current_buf(plain)
-  vim.cmd.ChezmoiPreview()
+  vim.cmd("Chezmoi preview")
   eq("preview refuses non-template buffers", has_note("not a chezmoi template buffer"), true)
 end
 
--- :ChezmoiDiff opens a diff split; `q` closes it; empty diff only notifies
+-- :Chezmoi diff opens a diff split; `q` closes it; empty diff only notifies
 do
   fake["diff"] = { code = 0, stdout = "diff --git a/x b/x\n+new\n" }
-  vim.cmd.ChezmoiDiff()
+  vim.cmd("Chezmoi diff")
   local dbuf = vim.api.nvim_get_current_buf()
   eq("diff split content", vim.api.nvim_buf_get_lines(dbuf, 0, 1, false)[1], "diff --git a/x b/x")
   eq("diff split filetype", vim.bo[dbuf].filetype, "diff")
@@ -534,7 +573,7 @@ do
 
   clear_notes()
   fake["diff"] = { code = 0, stdout = "  \n" }
-  vim.cmd.ChezmoiDiff()
+  vim.cmd("Chezmoi diff")
   eq("empty diff notifies instead of splitting", has_note("no differences"), true)
 end
 
@@ -558,15 +597,15 @@ do
   eq("redirect edits the source path", vim.api.nvim_buf_get_name(0):find("dot_chezmoi%-test%-deployed$") ~= nil, true)
 end
 
--- :ChezmoiSource from a deployed file / from inside the source dir
+-- :Chezmoi source from a deployed file / from inside the source dir
 do
   clear_notes()
   vim.api.nvim_set_current_buf(tb)
-  vim.cmd.ChezmoiSource()
-  eq("ChezmoiSource inside source dir just notifies", has_note("already in the chezmoi source directory"), true)
+  vim.cmd("Chezmoi source")
+  eq("Chezmoi source inside source dir just notifies", has_note("already in the chezmoi source directory"), true)
 end
 
--- :ChezmoiPick with the vim.ui.select fallback backend
+-- :Chezmoi pick with the vim.ui.select fallback backend
 do
   ct.config.picker = "select"
   fake["managed"] = { code = 0, stdout = "dot_pick_me.tmpl\n" }
@@ -575,13 +614,13 @@ do
   vim.ui.select = function(items, _, cb)
     cb(items[1])
   end
-  vim.cmd.ChezmoiPick()
+  vim.cmd("Chezmoi pick")
   eq("select backend edits the picked source file", vim.api.nvim_buf_get_name(0), SRC .. "/dot_pick_me.tmpl")
   vim.ui.select = real_select
 
   clear_notes()
   ct.config.picker = "nope"
-  vim.cmd.ChezmoiPick()
+  vim.cmd("Chezmoi pick")
   eq("unknown picker backend errors", has_note("unknown picker"), true)
   ct.config.picker = nil
 end
@@ -681,7 +720,7 @@ do
   end
   for _, name in ipairs({ "snacks", "telescope", "fzf-lua" }) do
     ct.config.picker = name
-    vim.cmd.ChezmoiPick()
+    vim.cmd("Chezmoi pick")
     eq("picker backend " .. name .. " gets source dir", picked[name], SRC .. "/")
   end
   ct.config.picker = nil

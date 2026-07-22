@@ -1,8 +1,12 @@
 -- blink.cmp completion source for chezmoi templates.
 --
--- Inside {{ … }}: template data keys (from `chezmoi data`, icon reflects the
--- value's type), template/sprig/chezmoi functions, and Go template keywords.
--- Outside actions: block snippets ({{- if }} … {{- end }} and friends).
+-- Context-aware via the gotmpl treesitter tree (falls back to a line regex when
+-- the parser is absent):
+--   • after a dot (.foo): data keys only (from `chezmoi data`, icon by value type)
+--   • command position inside {{ }}: data keys + template/sprig/chezmoi functions
+--     + Go template keywords
+--   • inside a string literal: nothing (stays out of the way)
+--   • outside actions: block snippets ({{- if }} … {{- end }} and friends)
 --
 -- Register in your blink.cmp opts:
 --   sources = {
@@ -213,10 +217,12 @@ function M.masked(path)
   return false
 end
 
-local action_cache, block_cache
+local data_cache, action_cache, block_cache
 
--- Data-key items go stale with `chezmoi data`; called on FocusGained (init.lua)
+-- Data-key items go stale with `chezmoi data`; called on FocusGained (init.lua).
+-- action_cache embeds the data items, so both drop together.
 function M.invalidate()
+  data_cache = nil
   action_cache = nil
 end
 
@@ -228,11 +234,13 @@ local function item(label, icon_spec, extra)
   return it
 end
 
-local function action_items()
-  if action_cache then
-    return action_cache
+-- Just the `chezmoi data` keys (dotted paths). Offered alone after a `.`, where
+-- functions/keywords can't appear.
+local function data_items()
+  if data_cache then
+    return data_cache
   end
-  action_cache = {}
+  data_cache = {}
   local data = require("chezmoi-template.resolve").data()
   if data then
     for _, e in ipairs(M.flatten(data)) do
@@ -247,12 +255,21 @@ local function action_items()
       end
       -- lua fence so blink's treesitter docs highlight the value by type
       -- (true=boolean, 1=number, "x"=string) — needs the markdown_inline parser
-      action_cache[#action_cache + 1] = item(e.path, ICON[type(e.value)] or ICON.table, {
+      data_cache[#data_cache + 1] = item(e.path, ICON[type(e.value)] or ICON.table, {
         kind = KIND.Variable,
         documentation = { kind = "markdown", value = "```lua\n" .. value .. "\n```" },
       })
     end
   end
+  return data_cache
+end
+
+-- Everything valid at command position: data keys + functions + keywords.
+local function action_items()
+  if action_cache then
+    return action_cache
+  end
+  action_cache = vim.list_extend({}, data_items())
   for _, f in ipairs(FUNCTIONS) do
     action_cache[#action_cache + 1] = item(f, ICON.func, { kind = KIND.Function })
   end
@@ -293,7 +310,9 @@ function M:get_trigger_characters()
   return { "." }
 end
 
--- Inside an unclosed {{ … on this line?
+-- Fallback context probe when the gotmpl parser is absent: inside an unclosed
+-- {{ … on the current line? Single-line only — the treesitter path handles the
+-- multiline and in-string cases this misses.
 local function in_action()
   local line = vim.api.nvim_get_current_line()
   local col = vim.api.nvim_win_get_cursor(0)[2]
@@ -303,12 +322,69 @@ local function in_action()
   return open ~= nil and (close == nil or open > close)
 end
 
+-- Cursor token preceded by a dot (`.foo|`, `.a.b|`) — field access, where only
+-- data keys are valid (not functions/keywords). Works with or without the
+-- parser, so positional narrowing degrades gracefully.
+local function after_dot()
+  local col = vim.api.nvim_win_get_cursor(0)[2]
+  return vim.api.nvim_get_current_line():sub(1, col):match("%.[%w_]*$") ~= nil
+end
+
+local STRING_NODES = { interpreted_string_literal = true, raw_string_literal = true }
+
+-- Classify the cursor via the gotmpl tree: "action" (inside {{ }}), "string"
+-- (inside a string literal — suppress), or "text" (target-language body).
+-- Returns nil when no gotmpl parser is available, so the caller falls back to
+-- in_action(). The stable invariant: gotmpl parses the target body as opaque
+-- `text` nodes (that's what injection consumes), so anything else is an action.
+local function ts_where()
+  local ok, res = pcall(function()
+    local parser = vim.treesitter.get_parser(0, "gotmpl")
+    if not parser then
+      return nil
+    end
+    parser:parse(true)
+    local node = vim.treesitter.get_node()
+    if not node then
+      return "text"
+    end
+    local n = node
+    while n do
+      if STRING_NODES[n:type()] then
+        return "string"
+      end
+      n = n:parent()
+    end
+    return node:type() == "text" and "text" or "action"
+  end)
+  return ok and res or nil
+end
+
+-- "block" | "field" | "command" | "suppress"
+local function context()
+  local where = ts_where() or (in_action() and "action" or "text")
+  if where == "string" then
+    return "suppress"
+  end
+  if where ~= "action" then
+    return "block"
+  end
+  return after_dot() and "field" or "command"
+end
+
 function M:get_completions(_, callback)
-  callback({
-    is_incomplete_forward = false,
-    is_incomplete_backward = false,
-    items = in_action() and action_items() or block_items(),
-  })
+  local ctx = context()
+  local items
+  if ctx == "field" then
+    items = data_items()
+  elseif ctx == "command" then
+    items = action_items()
+  elseif ctx == "suppress" then
+    items = {}
+  else
+    items = block_items()
+  end
+  callback({ is_incomplete_forward = false, is_incomplete_backward = false, items = items })
 end
 
 return M

@@ -1,4 +1,4 @@
-# :ChezmoiPick — fuzzy-find over the source directory, target-aware icons.
+# :Chezmoi pick — fuzzy-find over the source directory, target-aware icons.
 # Run `source assets/demo/setup.sh` first (isolated demo source).
 #   vhs assets/tapes/picker.tape
 
@@ -15,7 +15,7 @@ Hide
 Type "nvim -i NONE --cmd 'luafile assets/demo/demo-init.lua'" Enter
 Sleep 4s
 Show
-Type ":ChezmoiPick"
+Type ":Chezmoi pick"
 Sleep 0.5s
 Enter
 Sleep 2s

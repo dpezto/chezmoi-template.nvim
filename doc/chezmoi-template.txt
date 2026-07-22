@@ -114,25 +114,30 @@ encryption.exclude lua patterns leave matching paths as plain binary.
 ==============================================================================
 4. COMMANDS                                         *chezmoi-template-commands*
 
-                                                                *:ChezmoiApply*
-:ChezmoiApply         Apply the current buffer's deploy target.
-:ChezmoiApply!        Apply all targets.
+                                                                     *:Chezmoi*
+:Chezmoi {sub}        Run subcommand {sub}. The subcommand name tab-completes.
+                      A leading bang (`:Chezmoi! {sub}`) is passed through to
+                      the subcommand.
 
-                                                                 *:ChezmoiDiff*
-:ChezmoiDiff          Diff for the current buffer's target in a split; the
+                                                             *:Chezmoi-apply*
+:Chezmoi apply        Apply the current buffer's deploy target.
+:Chezmoi! apply       Apply all targets.
+
+                                                              *:Chezmoi-diff*
+:Chezmoi diff         Diff for the current buffer's target in a split; the
                       whole state when the buffer is not chezmoi-managed.
                       `q` closes the split.
 
-                                                               *:ChezmoiTarget*
-:ChezmoiTarget        Echo the current buffer's deploy target path.
-:ChezmoiTarget!       Open the deployed file.
+                                                            *:Chezmoi-target*
+:Chezmoi target       Echo the current buffer's deploy target path.
+:Chezmoi! target      Open the deployed file.
 
-                                                               *:ChezmoiSource*
-:ChezmoiSource        From a deployed managed file, jump to its chezmoi
+                                                            *:Chezmoi-source*
+:Chezmoi source       From a deployed managed file, jump to its chezmoi
                       source. (Set redirect = true to do this automatically.)
 
-                                                              *:ChezmoiPreview*
-:ChezmoiPreview       Toggle a vertical split with the rendered template
+                                                           *:Chezmoi-preview*
+:Chezmoi preview      Toggle a vertical split with the rendered template
                       (`chezmoi execute-template`), typed as the target
                       filetype and re-rendered on every write. The preview
                       buffer is named chezmoi-preview://<target> (a
@@ -141,8 +146,8 @@ encryption.exclude lua patterns leave matching paths as plain binary.
                       non-template buffers. NOTE: templates calling secret
                       managers render real secrets here.
 
-                                                                 *:ChezmoiPick*
-:ChezmoiPick          File picker over the source directory. Backend from
+                                                              *:Chezmoi-pick*
+:Chezmoi pick         File picker over the source directory. Backend from
                       the picker option; auto-detects loaded pickers
                       (snacks > telescope > fzf-lua > mini.pick), falling
                       back to |vim.ui.select()|. Lazy-loaded pickers may not
@@ -152,11 +157,13 @@ encryption.exclude lua patterns leave matching paths as plain binary.
 5. COMPLETION                                     *chezmoi-template-completion*
 
 A blink.cmp source for gotmpl buffers (blink.cmp ≥ 0.13 — per-item kind
-icons/highlights). Inside {{ … }} it completes template
-data keys (from `chezmoi data`; kind icons reflect each value's type, docs
-preview the value), template/sprig/chezmoi functions, and Go template
-keywords. Outside actions it completes block snippets (if, ifelse, range,
-rangekv, with, define, block, comment) expanding to full
+icons/highlights). Inside {{ … }} it narrows by cursor position using the
+gotmpl treesitter tree (falling back to a line heuristic when the parser is
+absent): after a dot (.foo) only data keys (from `chezmoi data`; kind icons
+reflect each value's type, docs preview the value); at command position it
+also offers template/sprig/chezmoi functions and Go template keywords; inside
+string literals nothing. Outside actions it completes block snippets (if,
+ifelse, range, rangekv, with, define, block, comment) expanding to full
 `{{- … }}…{{- end }}` pairs. Register it in blink.cmp opts: >lua
 
   sources = {

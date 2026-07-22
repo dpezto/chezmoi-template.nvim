@@ -1,4 +1,4 @@
-# :ChezmoiPreview — live rendered split, re-rendered as you type (no save).
+# :Chezmoi preview — live rendered split, re-rendered as you type (no save).
 # The pause after typing `{{` shows the stale mark: an in-progress (unclosed)
 # action fails to render, so the last valid output is kept and flagged until the
 # action is completed and it refreshes.
@@ -19,7 +19,7 @@ Hide
 Type "nvim -i NONE --cmd 'luafile assets/demo/demo-init.lua' ~/.cache/chezmoi-template-demo/src/dot_zshrc.tmpl" Enter
 Sleep 6s
 Show
-Type ":ChezmoiPreview" Enter
+Type ":Chezmoi preview" Enter
 Sleep 3s
 # open an insert line on the blank line 2 — 'O' directly on the # comment line
 # would inherit the comment leader (formatoptions 'o')
@@ -47,7 +47,7 @@ Sleep 800ms
 # clean up the demo line — the preview live-refreshes back
 Type "dd"
 Sleep 1200ms
-Type ":ChezmoiPreview" Enter
+Type ":Chezmoi preview" Enter
 Sleep 1s
 Hide
 Type ":qa!" Enter
