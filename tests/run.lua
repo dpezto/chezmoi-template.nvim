@@ -205,43 +205,82 @@ eq("diagnostics parse positionless", diagnostics.parse("chezmoi: some other fail
 
 local blink = require("chezmoi-template.blink")
 
--- context-aware completions: snippets outside {{ }}, symbols inside
+-- context-aware completions. No gotmpl parser in this env, so ts_where() returns
+-- nil and the in_action() line regex drives in/out; after_dot() drives
+-- field-vs-command. Probe positional narrowing with the static `includeTemplate`
+-- function (data_items is empty here — fake `chezmoi data` isn't wired up yet).
 do
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_current_buf(buf)
   vim.bo[buf].filetype = "gotmpl"
   local src = blink.new()
 
-  local function labels_at(line, col)
+  local function scan(line, col)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, { line })
     vim.api.nvim_win_set_cursor(0, { 1, col })
-    local got
+    local items
     src:get_completions(nil, function(res)
-      got = res.items
+      items = res.items
     end)
-    return got
+    local has_if_snippet, has_fn, has_snippet = false, false, false
+    for _, it in ipairs(items) do
+      if it.insertTextFormat == 2 then
+        has_snippet = true
+      end
+      if it.label == "if" and it.insertTextFormat == 2 and it.insertText:find("{{- end }}", 1, true) then
+        has_if_snippet = true
+      end
+      if it.label == "includeTemplate" then
+        has_fn = true
+      end
+    end
+    return { snippet = has_if_snippet, fn = has_fn, any_snippet = has_snippet }
   end
 
-  local outside = labels_at("", 0)
-  local has_if_snippet, has_fn = false, false
-  for _, it in ipairs(outside) do
-    if it.label == "if" and it.insertTextFormat == 2 and it.insertText:find("{{- end }}", 1, true) then
-      has_if_snippet = true
-    end
-  end
-  eq("blink outside {{ }} offers block snippets", has_if_snippet, true)
+  -- outside any action: block snippets, no functions
+  eq("blink outside {{ }} offers block snippets", scan("", 0).snippet, true)
 
-  local inside = labels_at("{{ .che }}", 7)
-  local has_snippet = false
-  for _, it in ipairs(inside) do
-    if it.insertTextFormat == 2 then
-      has_snippet = true
+  -- command position (no leading dot): functions offered, no snippets
+  local cmd = scan("{{ inclu }}", 8)
+  eq("blink command position offers functions, no snippets", { cmd.fn, cmd.any_snippet }, { true, false })
+
+  -- field position (after a dot): data keys only — functions absent, no snippets
+  local field = scan("{{ .che }}", 7)
+  eq("blink field position offers no functions/snippets", { field.fn, field.any_snippet }, { false, false })
+
+  -- treesitter-only cases (skipped in CI where the gotmpl parser is absent):
+  -- multiline actions the line regex can't see, and string-literal suppression.
+  local ok_parser, parser = pcall(vim.treesitter.get_parser, buf, "gotmpl")
+  if ok_parser and parser then
+    -- action spans two lines; cursor is on line 2 after `.che`. The single-line
+    -- regex would read this as outside an action (block snippets); treesitter
+    -- correctly sees field position.
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "{{", ".che", "}}" })
+    vim.api.nvim_win_set_cursor(0, { 2, 4 })
+    local ml
+    src:get_completions(nil, function(res)
+      ml = res.items
+    end)
+    local ml_fn, ml_snip = false, false
+    for _, it in ipairs(ml) do
+      if it.label == "includeTemplate" then
+        ml_fn = true
+      end
+      if it.insertTextFormat == 2 then
+        ml_snip = true
+      end
     end
-    if it.label == "includeTemplate" then
-      has_fn = true
-    end
+    eq("blink multiline action is field position", { ml_fn, ml_snip }, { false, false })
+
+    -- cursor inside a string literal: no completions dumped
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { '{{ template "na" }}' })
+    vim.api.nvim_win_set_cursor(0, { 1, 14 })
+    local instr
+    src:get_completions(nil, function(res)
+      instr = res.items
+    end)
+    eq("blink suppresses completion inside string literals", #instr, 0)
   end
-  eq("blink inside {{ }} offers symbols, no snippets", { has_fn, has_snippet }, { true, false })
 end
 
 eq("blink mask secretish keys", {

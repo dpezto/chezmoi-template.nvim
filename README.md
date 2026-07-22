@@ -203,16 +203,16 @@ sources = {
 }
 ```
 
-The source only activates in gotmpl buffers. Inside `{{ … }}` it offers data keys, functions and keywords; elsewhere it offers block snippets (`if` → `{{- if … }}\n…\n{{- end }}` etc.), so it stays out of the way of the target language's own completion. Note: templates using secret-manager functions (`onepassword`, `vault`, …) may make `:ChezmoiPreview`/diagnostics slow or fail without auth — those calls run whatever your template runs.
+The source only activates in gotmpl buffers. Inside `{{ … }}` it narrows by cursor position (treesitter-driven, with a line-regex fallback): data keys after a dot, plus functions and keywords at command position, and nothing inside string literals; elsewhere it offers block snippets (`if` → `{{- if … }}\n…\n{{- end }}` etc.), so it stays out of the way of the target language's own completion. Note: templates using secret-manager functions (`onepassword`, `vault`, …) may make `:Chezmoi preview`/diagnostics slow or fail without auth — those calls run whatever your template runs.
 
 ## Picker
 
-![:ChezmoiPick over the source directory](assets/picker.gif)
+![:Chezmoi pick over the source directory](assets/picker.gif)
 
-`:ChezmoiPick` opens a file picker over the source directory. Backend auto-detects among loaded pickers (snacks → telescope → fzf-lua → mini.pick) with a `vim.ui.select` fallback; if your picker is lazy-loaded it may not be detected — set `picker = "telescope"` (etc.) explicitly. Map it however you like:
+`:Chezmoi pick` opens a file picker over the source directory. Backend auto-detects among loaded pickers (snacks → telescope → fzf-lua → mini.pick) with a `vim.ui.select` fallback; if your picker is lazy-loaded it may not be detected — set `picker = "telescope"` (etc.) explicitly. Map it however you like:
 
 ```lua
-keys = { { "<leader>sz", "<cmd>ChezmoiPick<cr>", desc = "Chezmoi source files" } },
+keys = { { "<leader>sz", "<cmd>Chezmoi pick<cr>", desc = "Chezmoi source files" } },
 ```
 
 ## Secrets

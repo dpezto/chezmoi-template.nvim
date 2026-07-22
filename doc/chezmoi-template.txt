@@ -157,11 +157,13 @@ encryption.exclude lua patterns leave matching paths as plain binary.
 5. COMPLETION                                     *chezmoi-template-completion*
 
 A blink.cmp source for gotmpl buffers (blink.cmp ≥ 0.13 — per-item kind
-icons/highlights). Inside {{ … }} it completes template
-data keys (from `chezmoi data`; kind icons reflect each value's type, docs
-preview the value), template/sprig/chezmoi functions, and Go template
-keywords. Outside actions it completes block snippets (if, ifelse, range,
-rangekv, with, define, block, comment) expanding to full
+icons/highlights). Inside {{ … }} it narrows by cursor position using the
+gotmpl treesitter tree (falling back to a line heuristic when the parser is
+absent): after a dot (.foo) only data keys (from `chezmoi data`; kind icons
+reflect each value's type, docs preview the value); at command position it
+also offers template/sprig/chezmoi functions and Go template keywords; inside
+string literals nothing. Outside actions it completes block snippets (if,
+ifelse, range, rangekv, with, define, block, comment) expanding to full
 `{{- … }}…{{- end }}` pairs. Register it in blink.cmp opts: >lua
 
   sources = {
