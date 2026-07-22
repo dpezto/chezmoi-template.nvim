@@ -287,6 +287,11 @@ do
   eq("format resolves ft from name when unseeded", masked, true)
 end
 
+-- flush coverage stats before exit (`nvim -l` may skip luacov's exit hook)
+if os.getenv("COVERAGE") then
+  require("luacov.runner").shutdown()
+end
+
 if failures > 0 then
   error(failures .. " test case(s) failed")
 end

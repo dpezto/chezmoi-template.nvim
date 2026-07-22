@@ -1,6 +1,13 @@
 -- Run from the repo root: nvim --headless --clean -u tests/minimal_init.lua -l tests/run.lua
 vim.opt.rtp:prepend(vim.fn.getcwd())
 
+-- COVERAGE=1: record line coverage with luacov (must start before the plugin
+-- modules load; jit.off() because compiled traces bypass the line hook)
+if os.getenv("COVERAGE") then
+  jit.off()
+  require("luacov")
+end
+
 -- Stub conform: identity "formatter" so tests exercise masking/restore/indent
 -- logic without any external formatter binaries. Captures the masked scratch
 -- buffer for assertions.
