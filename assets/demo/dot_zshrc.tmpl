@@ -1,0 +1,27 @@
+# managed by chezmoi ({{ .chezmoi.os }})
+
+{{- range $name, $spec := .packages.apps }}
+{{- $role := get $spec "role" }}
+{{- if eq $role "core" }}
+{{- $via := get $spec "via" }}
+{{- end }}
+{{- end }}
+
+{{- if eq .chezmoi.os "darwin" }}
+export HOMEBREW_PREFIX="/opt/homebrew"
+{{- else }}
+export HOMEBREW_PREFIX="/home/linuxbrew/.linuxbrew"
+{{- end }}
+
+alias cz="chezmoi"
+
+if command -v brew &>/dev/null; then
+  alias b="brew"
+{{- if not .is_lowmem }}
+  alias bug="brew upgrade && brew cleanup"
+{{- end }}
+fi
+
+{{- if eq .chezmoi.os "darwin" }}
+alias flush='sudo dscacheutil -flushcache'
+{{- end }}
