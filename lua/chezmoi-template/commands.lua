@@ -62,7 +62,7 @@ local function open_scratch_split(lines, ft)
   return buf
 end
 
--- :ChezmoiPreview — render the current template via execute-template into a
+-- :Chezmoi preview — render the current template via execute-template into a
 -- vsplit typed as the target filetype; re-renders live as you type (or on write
 -- when preview.live is false). Running it again closes the preview.
 -- state: src buf -> { dest, timer, tick, rendering, pending, live, slow_ms,
@@ -276,69 +276,110 @@ local function preview_toggle()
   preview_render(src, dest)
 end
 
-local function define_commands()
-  vim.api.nvim_create_user_command("ChezmoiApply", function(opts)
-    if opts.bang then
-      return apply(nil)
-    end
-    local target = buf_target(0)
-    if not target then
-      return notify("buffer has no chezmoi target (use :ChezmoiApply! for all)", vim.log.levels.WARN)
-    end
-    apply(target)
-  end, { bang = true, desc = "chezmoi apply current buffer's target (! = all)" })
+-- obsidian.nvim-style single command: `:Chezmoi <sub>` dispatches to one of
+-- these. Each run() takes a ctx carrying the bang; none take value args.
+local subcommands = {
+  apply = {
+    desc = "apply current buffer's target (! = all)",
+    run = function(ctx)
+      if ctx.bang then
+        return apply(nil)
+      end
+      local target = buf_target(0)
+      if not target then
+        return notify("buffer has no chezmoi target (use :Chezmoi! apply for all)", vim.log.levels.WARN)
+      end
+      apply(target)
+    end,
+  },
 
-  vim.api.nvim_create_user_command("ChezmoiDiff", function()
-    local target = buf_target(0)
-    local cmd = { "chezmoi", "diff" }
-    if target then
-      table.insert(cmd, target)
-    end
-    local ret = vim.system(cmd, { text = true }):wait()
-    if ret.code ~= 0 and (ret.stderr or "") ~= "" then
-      return notify("diff failed:\n" .. ret.stderr, vim.log.levels.ERROR)
-    end
-    local out = ret.stdout or ""
-    if vim.trim(out) == "" then
-      return notify("no differences" .. (target and " for " .. vim.fn.fnamemodify(target, ":~") or ""))
-    end
-    open_scratch_split(vim.split(out, "\n"), "diff")
-  end, { desc = "chezmoi diff for current target (whole state on non-chezmoi buffers)" })
+  diff = {
+    desc = "diff for current target (whole state on non-chezmoi buffers)",
+    run = function()
+      local target = buf_target(0)
+      local cmd = { "chezmoi", "diff" }
+      if target then
+        table.insert(cmd, target)
+      end
+      local ret = vim.system(cmd, { text = true }):wait()
+      if ret.code ~= 0 and (ret.stderr or "") ~= "" then
+        return notify("diff failed:\n" .. ret.stderr, vim.log.levels.ERROR)
+      end
+      local out = ret.stdout or ""
+      if vim.trim(out) == "" then
+        return notify("no differences" .. (target and " for " .. vim.fn.fnamemodify(target, ":~") or ""))
+      end
+      open_scratch_split(vim.split(out, "\n"), "diff")
+    end,
+  },
 
-  vim.api.nvim_create_user_command("ChezmoiTarget", function(opts)
-    local target = buf_target(0)
-    if not target then
-      return notify("buffer has no chezmoi target", vim.log.levels.WARN)
-    end
-    if opts.bang then
-      vim.cmd.edit(vim.fn.fnameescape(target))
-    else
-      notify(vim.fn.fnamemodify(target, ":~"))
-    end
-  end, { bang = true, desc = "show current buffer's deploy target (! = open it)" })
+  target = {
+    desc = "show current buffer's deploy target (! = open it)",
+    run = function(ctx)
+      local target = buf_target(0)
+      if not target then
+        return notify("buffer has no chezmoi target", vim.log.levels.WARN)
+      end
+      if ctx.bang then
+        vim.cmd.edit(vim.fn.fnameescape(target))
+      else
+        notify(vim.fn.fnamemodify(target, ":~"))
+      end
+    end,
+  },
 
-  vim.api.nvim_create_user_command("ChezmoiSource", function()
-    local file = vim.api.nvim_buf_get_name(0)
-    if file == "" then
-      return notify("unnamed buffer", vim.log.levels.WARN)
-    end
-    if resolve.is_managed(file) then
-      return notify("already in the chezmoi source directory")
-    end
-    local ret = vim.system({ "chezmoi", "source-path", file }, { text = true }):wait()
-    if ret.code ~= 0 then
-      return notify("not a chezmoi-managed file", vim.log.levels.WARN)
-    end
-    vim.cmd.edit(vim.fn.fnameescape(vim.trim(ret.stdout)))
-  end, { desc = "jump from a deployed file to its chezmoi source" })
+  source = {
+    desc = "jump from a deployed file to its chezmoi source",
+    run = function()
+      local file = vim.api.nvim_buf_get_name(0)
+      if file == "" then
+        return notify("unnamed buffer", vim.log.levels.WARN)
+      end
+      if resolve.is_managed(file) then
+        return notify("already in the chezmoi source directory")
+      end
+      local ret = vim.system({ "chezmoi", "source-path", file }, { text = true }):wait()
+      if ret.code ~= 0 then
+        return notify("not a chezmoi-managed file", vim.log.levels.WARN)
+      end
+      vim.cmd.edit(vim.fn.fnameescape(vim.trim(ret.stdout)))
+    end,
+  },
 
-  vim.api.nvim_create_user_command("ChezmoiPreview", preview_toggle, {
+  preview = {
     desc = "toggle rendered preview of the current template (updates live as you type)",
-  })
+    run = preview_toggle,
+  },
 
-  vim.api.nvim_create_user_command("ChezmoiPick", function()
-    require("chezmoi-template.picker").open()
-  end, { desc = "pick a chezmoi source file (snacks/telescope/fzf-lua/mini.pick/select)" })
+  pick = {
+    desc = "pick a chezmoi source file (snacks/telescope/fzf-lua/mini.pick/select)",
+    run = function()
+      require("chezmoi-template.picker").open()
+    end,
+  },
+}
+
+local sub_names = vim.tbl_keys(subcommands)
+table.sort(sub_names)
+
+local function define_commands()
+  vim.api.nvim_create_user_command("Chezmoi", function(o)
+    local sub = o.fargs[1]
+    local entry = sub and subcommands[sub]
+    if not entry then
+      return notify(("usage: :Chezmoi <%s>"):format(table.concat(sub_names, "|")), vim.log.levels.WARN)
+    end
+    entry.run({ bang = o.bang })
+  end, {
+    bang = true,
+    nargs = "*",
+    desc = "chezmoi-template",
+    complete = function(arglead)
+      return vim.tbl_filter(function(n)
+        return n:find(arglead, 1, true) == 1
+      end, sub_names)
+    end,
+  })
 end
 
 function M.setup()

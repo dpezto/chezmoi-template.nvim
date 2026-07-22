@@ -420,22 +420,22 @@ require("chezmoi-template.encryption").setup()
 -- FocusGained drops stale caches
 vim.api.nvim_exec_autocmds("FocusGained", {})
 
--- :ChezmoiTarget notifies the deploy target
+-- :Chezmoi target notifies the deploy target
 local tb = vim.api.nvim_create_buf(true, false)
 vim.api.nvim_buf_set_name(tb, SRC .. "/dot_zshrc.tmpl")
 vim.api.nvim_set_current_buf(tb)
 clear_notes()
-vim.cmd.ChezmoiTarget()
-eq("ChezmoiTarget notifies target path", has_note(".zshrc"), true)
+vim.cmd("Chezmoi target")
+eq("Chezmoi target notifies target path", has_note(".zshrc"), true)
 
--- :ChezmoiApply applies the buffer target and notifies
+-- :Chezmoi apply applies the buffer target and notifies
 fake["apply"] = { code = 0, stdout = "" }
 clear_notes()
-vim.cmd.ChezmoiApply()
+vim.cmd("Chezmoi apply")
 vim.wait(1000, function()
   return has_note("applied")
 end)
-eq("ChezmoiApply notifies applied target", has_note("applied"), true)
+eq("Chezmoi apply notifies applied target", has_note("applied"), true)
 
 -- apply-on-save + diagnostics on BufWritePost (template error -> diagnostic)
 vim.bo[tb].filetype = "gotmpl"
@@ -462,13 +462,13 @@ clear_notes()
 vim.api.nvim_exec_autocmds("BufReadPost", { buffer = tb })
 eq("notify_on_open fires only once", has_note("applies on save"), false)
 
--- :ChezmoiPreview renders into a split, re-renders live as you type, keeps the
+-- :Chezmoi preview renders into a split, re-renders live as you type, keeps the
 -- last valid render on error, toggles closed
 do
   resolve.seed(tb, "zsh")
   fake["execute-template"] = { code = 0, stdout = "rendered ok\n" }
   vim.api.nvim_set_current_buf(tb)
-  vim.cmd.ChezmoiPreview()
+  vim.cmd("Chezmoi preview")
   local dest
   vim.wait(1000, function()
     for _, b in ipairs(vim.api.nvim_list_bufs()) do
@@ -512,20 +512,20 @@ do
   eq("preview keeps last valid render on error", vim.api.nvim_buf_get_lines(dest, 0, -1, false), { "re-rendered" })
 
   vim.api.nvim_set_current_buf(tb)
-  vim.cmd.ChezmoiPreview()
+  vim.cmd("Chezmoi preview")
   eq("preview toggles closed", vim.api.nvim_buf_is_valid(dest), false)
 
   clear_notes()
   local plain = vim.api.nvim_create_buf(true, false)
   vim.api.nvim_set_current_buf(plain)
-  vim.cmd.ChezmoiPreview()
+  vim.cmd("Chezmoi preview")
   eq("preview refuses non-template buffers", has_note("not a chezmoi template buffer"), true)
 end
 
--- :ChezmoiDiff opens a diff split; `q` closes it; empty diff only notifies
+-- :Chezmoi diff opens a diff split; `q` closes it; empty diff only notifies
 do
   fake["diff"] = { code = 0, stdout = "diff --git a/x b/x\n+new\n" }
-  vim.cmd.ChezmoiDiff()
+  vim.cmd("Chezmoi diff")
   local dbuf = vim.api.nvim_get_current_buf()
   eq("diff split content", vim.api.nvim_buf_get_lines(dbuf, 0, 1, false)[1], "diff --git a/x b/x")
   eq("diff split filetype", vim.bo[dbuf].filetype, "diff")
@@ -534,7 +534,7 @@ do
 
   clear_notes()
   fake["diff"] = { code = 0, stdout = "  \n" }
-  vim.cmd.ChezmoiDiff()
+  vim.cmd("Chezmoi diff")
   eq("empty diff notifies instead of splitting", has_note("no differences"), true)
 end
 
@@ -558,15 +558,15 @@ do
   eq("redirect edits the source path", vim.api.nvim_buf_get_name(0):find("dot_chezmoi%-test%-deployed$") ~= nil, true)
 end
 
--- :ChezmoiSource from a deployed file / from inside the source dir
+-- :Chezmoi source from a deployed file / from inside the source dir
 do
   clear_notes()
   vim.api.nvim_set_current_buf(tb)
-  vim.cmd.ChezmoiSource()
-  eq("ChezmoiSource inside source dir just notifies", has_note("already in the chezmoi source directory"), true)
+  vim.cmd("Chezmoi source")
+  eq("Chezmoi source inside source dir just notifies", has_note("already in the chezmoi source directory"), true)
 end
 
--- :ChezmoiPick with the vim.ui.select fallback backend
+-- :Chezmoi pick with the vim.ui.select fallback backend
 do
   ct.config.picker = "select"
   fake["managed"] = { code = 0, stdout = "dot_pick_me.tmpl\n" }
@@ -575,13 +575,13 @@ do
   vim.ui.select = function(items, _, cb)
     cb(items[1])
   end
-  vim.cmd.ChezmoiPick()
+  vim.cmd("Chezmoi pick")
   eq("select backend edits the picked source file", vim.api.nvim_buf_get_name(0), SRC .. "/dot_pick_me.tmpl")
   vim.ui.select = real_select
 
   clear_notes()
   ct.config.picker = "nope"
-  vim.cmd.ChezmoiPick()
+  vim.cmd("Chezmoi pick")
   eq("unknown picker backend errors", has_note("unknown picker"), true)
   ct.config.picker = nil
 end
@@ -681,7 +681,7 @@ do
   end
   for _, name in ipairs({ "snacks", "telescope", "fzf-lua" }) do
     ct.config.picker = name
-    vim.cmd.ChezmoiPick()
+    vim.cmd("Chezmoi pick")
     eq("picker backend " .. name .. " gets source dir", picked[name], SRC .. "/")
   end
   ct.config.picker = nil

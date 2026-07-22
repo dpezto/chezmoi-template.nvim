@@ -44,12 +44,12 @@ Most chezmoi integrations wrap the `chezmoi edit` CLI: temporary buffers, watche
 - **Target-aware icons** ([mini.icons](https://github.com/nvim-mini/mini.icons)). `private_dot_config/ghostty/config.tmpl` shows the ghostty icon, not a generic template glyph. Any combination of chezmoi source-state attributes (`private_`, `encrypted_`, `exact_`, `dot_`, `.tmpl`, `.age`, …) resolves to the deployed name.
 - **Transparent encryption** (opt-in). chezmoi-managed `*.age` files decrypt on open and re-encrypt on save via `chezmoi decrypt` / `chezmoi encrypt` — whatever your chezmoi config uses (age, rage, builtin age, even gpg) just works. `encrypted_*.tmpl.age` still gets full template + target highlighting.
 - **`%` matching for template delimiters** ([vim-matchup](https://github.com/andymass/vim-matchup)). `{{ if }}` ⇄ `{{ else }}` ⇄ `{{ end }}`, including `{{-` trim markers.
-- **Live template preview.** `:ChezmoiPreview` renders the buffer through `chezmoi execute-template` into a split typed as the target filetype, re-rendered live as you type (debounced). Invalid syntax keeps the last valid render — flagged stale in the winbar — until it parses again. `q` (or toggling again) closes it.
+- **Live template preview.** `:Chezmoi preview` renders the buffer through `chezmoi execute-template` into a split typed as the target filetype, re-rendered live as you type (debounced). Invalid syntax keeps the last valid render — flagged stale in the winbar — until it parses again. `q` (or toggling again) closes it.
 - **Template diagnostics.** Errors from `chezmoi execute-template` surface as `vim.diagnostic` entries on write — template typos stop being invisible until apply fails.
-- **Commands.** `:ChezmoiApply` (buffer target or `!` for all; apply-on-save on by default), `:ChezmoiDiff`, `:ChezmoiTarget`, `:ChezmoiSource` (jump from a deployed file to its source; opt-in automatic redirect), `:ChezmoiPreview`, `:ChezmoiPick` (source-file picker: snacks / telescope / fzf-lua / mini.pick / `vim.ui.select`).
-- **Completion** ([blink.cmp](https://github.com/Saghen/blink.cmp)). Inside `{{ … }}`: template data keys from `chezmoi data` (icons reflect each value's type, docs preview the value), template/sprig/chezmoi functions, and Go template keywords. Outside actions: block snippets — `if`, `if/else`, `range`, `with`, `define`, `block`, comments — expanding to full `{{- … }}…{{- end }}` pairs.
+- **Commands.** One `:Chezmoi` command with subcommands (tab-completed): `apply` (buffer target, or `:Chezmoi! apply` for all; apply-on-save on by default), `diff`, `target` (`:Chezmoi! target` opens the deployed file), `source` (jump from a deployed file to its source; opt-in automatic redirect), `preview`, `pick` (source-file picker: snacks / telescope / fzf-lua / mini.pick / `vim.ui.select`).
+- **Completion** ([blink.cmp](https://github.com/Saghen/blink.cmp)). Context-aware inside `{{ … }}` via the gotmpl treesitter tree: after a dot (`.foo`) it offers only data keys from `chezmoi data` (icons reflect each value's type, docs preview the value); at command position it adds template/sprig/chezmoi functions and Go template keywords; inside string literals it stays quiet. Outside actions: block snippets — `if`, `if/else`, `range`, `with`, `define`, `block`, comments — expanding to full `{{- … }}…{{- end }}` pairs. Falls back to a line heuristic when the gotmpl parser isn't installed.
 
-![:ChezmoiPreview — live rendered template in a split, re-rendered as you type](assets/preview.gif)
+![:Chezmoi preview — live rendered template in a split, re-rendered as you type](assets/preview.gif)
 
 Everything degrades gracefully: without the `chezmoi` binary you keep plain gotmpl highlighting and nothing errors.
 
@@ -115,7 +115,7 @@ require("chezmoi-template").setup({
     notify = true,             -- notify on successful applies (failures always notify)
   },
   preview = {
-    live = true,               -- :ChezmoiPreview re-renders as you type (false = on write)
+    live = true,               -- :Chezmoi preview re-renders as you type (false = on write)
     debounce = 150,             -- ms of idle before a live re-render
   },
   notify_on_open = false,      -- notify when opening a managed source file
@@ -224,7 +224,7 @@ What the plugin does by itself:
 
 What you should know:
 
-- `:ChezmoiPreview` and diagnostics run `chezmoi execute-template` on your buffer — templates calling secret managers (`onepassword`, `vault`, `pass`, …) will render real secrets into the preview split, and may be slow or fail without auth. Don't screen-share the preview of a secrets template.
+- `:Chezmoi preview` and diagnostics run `chezmoi execute-template` on your buffer — templates calling secret managers (`onepassword`, `vault`, `pass`, …) will render real secrets into the preview split, and may be slow or fail without auth. Don't screen-share the preview of a secrets template.
 - [cloak.nvim](https://github.com/laytan/cloak.nvim) composes well for masking secrets in decrypted buffers — its `file_pattern`s match the buffer name, which keeps its encrypted suffix: add `"*.age"`/`"*.asc"` (or specific names like `"*.json.age"`) to your cloak patterns.
 - [ecolog.nvim](https://github.com/philosofonusus/ecolog.nvim) env completion works inside templates by mirroring its providers onto the `gotmpl` filetype; its shelter mode then masks env values in completion/peek as usual:
 
@@ -244,10 +244,10 @@ What you should know:
 | Formatting            | —                                           | target-filetype formatting through templates               |
 | Icons                 | static per-extension glyphs                 | full source-name → target resolution                       |
 | age files             | —                                           | transparent decrypt/encrypt (opt-in)                       |
-| Preview / diagnostics | —                                           | `:ChezmoiPreview`, template errors as diagnostics          |
+| Preview / diagnostics | —                                           | `:Chezmoi preview`, template errors as diagnostics         |
 | Completion            | —                                           | data keys + template functions (blink.cmp)                 |
-| Apply                 | apply-on-save via `chezmoi edit --watch`    | `:ChezmoiApply` + apply-on-save (default)                  |
-| Picker                | telescope/fzf/snacks picker                 | `:ChezmoiPick` — snacks/telescope/fzf-lua/mini.pick/select |
+| Apply                 | apply-on-save via `chezmoi edit --watch`    | `:Chezmoi apply` + apply-on-save (default)                 |
+| Picker                | telescope/fzf/snacks picker                 | `:Chezmoi pick` — snacks/telescope/fzf-lua/mini.pick/select |
 
 ## Health
 

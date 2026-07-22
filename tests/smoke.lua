@@ -82,7 +82,7 @@ if vim.fn.filereadable(enc) == 1 then
 end
 
 vim.cmd.edit(zshrc)
-vim.cmd.ChezmoiPreview()
+vim.cmd("Chezmoi preview")
 local rendered
 vim.wait(5000, function()
   for _, win in ipairs(vim.api.nvim_list_wins()) do
@@ -113,7 +113,7 @@ check("q closes preview", not vim.api.nvim_buf_is_valid(pbuf))
 vim.cmd.edit(src .. ".chezmoiignore")
 vim.bo.filetype = "conf" -- simulate a non-template buffer
 local wins_before = #vim.api.nvim_list_wins()
-local pok, perr = pcall(vim.cmd.ChezmoiPreview)
+local pok, perr = pcall(vim.cmd, "Chezmoi preview")
 check("preview refuses non-template", pok and #vim.api.nvim_list_wins() == wins_before, perr)
 
 print("smoke config passed")
