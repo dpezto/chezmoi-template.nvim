@@ -16,6 +16,11 @@ M.config = {
   icons = { enabled = true },
   -- run `chezmoi apply <target>` after writing a managed source file
   apply = { on_save = true, notify = true },
+  -- :ChezmoiPreview rendered preview. live = re-render as you type (debounced,
+  -- ms); false = re-render on write only. Invalid syntax keeps the last valid
+  -- render until it parses again. slow_ms: if a render takes longer than this,
+  -- live pauses to on-write (guards heavy secret-manager templates); 0 disables.
+  preview = { live = true, debounce = 150, slow_ms = 500 },
   -- notify when opening a chezmoi-managed source file (à la chezmoi.nvim)
   notify_on_open = false,
   -- opening a deployed managed file jumps to its chezmoi source (opt-in)

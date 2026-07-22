@@ -1,4 +1,7 @@
-# :ChezmoiPreview — live rendered split, re-rendered on write.
+# :ChezmoiPreview — live rendered split, re-rendered as you type (no save).
+# The pause after typing `{{` shows the stale mark: an in-progress (unclosed)
+# action fails to render, so the last valid output is kept and flagged until the
+# action is completed and it refreshes.
 # Run `source assets/demo/setup.sh` first (isolated demo source).
 #   vhs assets/tapes/preview.tape
 
@@ -18,28 +21,32 @@ Sleep 6s
 Show
 Type ":ChezmoiPreview" Enter
 Sleep 3s
-# make a small edit and write — the preview re-renders
+# open an insert line on the blank line 2 — 'O' directly on the # comment line
+# would inherit the comment leader (formatoptions 'o')
 Type "gg"
 Sleep 300ms
-# open the line on the blank line 2 — 'O' directly on the # comment line
-# would inherit the comment leader (formatoptions 'o')
 Type "j"
 Sleep 300ms
 Type "O"
-Sleep 800ms
+Sleep 600ms
+# type live — the preview updates on each idle pause, no :w needed.
 # short line on purpose: the split is ~54 cols and 'sidescrolloff' would
 # h-scroll the view for anything longer, clipping the left column
-Type `export DEMO={{ .chezmoi.arch }}`
-Sleep 800ms
+Type "export DEMO="
+Sleep 500ms
+# unclosed action — the render fails, preview freezes on the last valid output
+# and the winbar shows the stale mark
+Type "{{"
+Sleep 1200ms
+# complete the action — next render is valid, the mark clears and the right
+# pane updates, still without saving
+Type " .chezmoi.arch }}"
+Sleep 1500ms
 Escape
-Sleep 500ms
-Type ":w" Enter
-Sleep 3s
-# clean up the demo line
+Sleep 800ms
+# clean up the demo line — the preview live-refreshes back
 Type "dd"
-Sleep 500ms
-Type ":w" Enter
-Sleep 2s
+Sleep 1200ms
 Type ":ChezmoiPreview" Enter
 Sleep 1s
 Hide

@@ -462,7 +462,8 @@ clear_notes()
 vim.api.nvim_exec_autocmds("BufReadPost", { buffer = tb })
 eq("notify_on_open fires only once", has_note("applies on save"), false)
 
--- :ChezmoiPreview renders into a split, re-renders on write, toggles closed
+-- :ChezmoiPreview renders into a split, re-renders live as you type, keeps the
+-- last valid render on error, toggles closed
 do
   resolve.seed(tb, "zsh")
   fake["execute-template"] = { code = 0, stdout = "rendered ok\n" }
@@ -481,12 +482,34 @@ do
   eq("preview renders template output", vim.api.nvim_buf_get_lines(dest, 0, -1, false), { "rendered ok" })
   eq("preview buffer typed as target ft", vim.bo[dest].filetype, "zsh")
 
+  -- editing the source (bumps changedtick) drives a debounced live re-render
   fake["execute-template"] = { code = 0, stdout = "re-rendered\n" }
-  vim.api.nvim_exec_autocmds("BufWritePost", { buffer = tb })
+  vim.api.nvim_buf_set_lines(tb, 0, -1, false, { "{{ .edit }}" })
+  vim.api.nvim_exec_autocmds("TextChanged", { buffer = tb })
   vim.wait(1000, function()
     return vim.api.nvim_buf_get_lines(dest, 0, -1, false)[1] == "re-rendered"
   end)
-  eq("preview re-renders on write", vim.api.nvim_buf_get_lines(dest, 0, -1, false), { "re-rendered" })
+  eq("preview re-renders live on text change", vim.api.nvim_buf_get_lines(dest, 0, -1, false), { "re-rendered" })
+
+  -- identical render output: the render runs (src changed) but the preview buffer
+  -- is left untouched — no rewrite, hence no redraw/treesitter reparse. dest is a
+  -- nofile buffer, so only nvim_buf_set_lines would bump its changedtick.
+  local dtick = vim.api.nvim_buf_get_changedtick(dest)
+  vim.api.nvim_buf_set_lines(tb, 0, -1, false, { "{{ .edit }} -- same output" })
+  vim.api.nvim_exec_autocmds("TextChanged", { buffer = tb })
+  vim.wait(500, function()
+    return false
+  end)
+  eq("preview skips rewrite when output unchanged", vim.api.nvim_buf_get_changedtick(dest), dtick)
+
+  -- invalid template: keep the last valid render, don't clobber it with the error
+  fake["execute-template"] = { code = 1, stderr = "chezmoi: template: bad" }
+  vim.api.nvim_buf_set_lines(tb, 0, -1, false, { "{{ if }}" })
+  vim.api.nvim_exec_autocmds("TextChanged", { buffer = tb })
+  vim.wait(500, function()
+    return false
+  end)
+  eq("preview keeps last valid render on error", vim.api.nvim_buf_get_lines(dest, 0, -1, false), { "re-rendered" })
 
   vim.api.nvim_set_current_buf(tb)
   vim.cmd.ChezmoiPreview()

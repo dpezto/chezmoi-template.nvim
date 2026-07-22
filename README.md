@@ -44,12 +44,12 @@ Most chezmoi integrations wrap the `chezmoi edit` CLI: temporary buffers, watche
 - **Target-aware icons** ([mini.icons](https://github.com/nvim-mini/mini.icons)). `private_dot_config/ghostty/config.tmpl` shows the ghostty icon, not a generic template glyph. Any combination of chezmoi source-state attributes (`private_`, `encrypted_`, `exact_`, `dot_`, `.tmpl`, `.age`, …) resolves to the deployed name.
 - **Transparent encryption** (opt-in). chezmoi-managed `*.age` files decrypt on open and re-encrypt on save via `chezmoi decrypt` / `chezmoi encrypt` — whatever your chezmoi config uses (age, rage, builtin age, even gpg) just works. `encrypted_*.tmpl.age` still gets full template + target highlighting.
 - **`%` matching for template delimiters** ([vim-matchup](https://github.com/andymass/vim-matchup)). `{{ if }}` ⇄ `{{ else }}` ⇄ `{{ end }}`, including `{{-` trim markers.
-- **Live template preview.** `:ChezmoiPreview` renders the buffer through `chezmoi execute-template` into a split typed as the target filetype, re-rendered on every write. `q` (or toggling again) closes it.
+- **Live template preview.** `:ChezmoiPreview` renders the buffer through `chezmoi execute-template` into a split typed as the target filetype, re-rendered live as you type (debounced). Invalid syntax keeps the last valid render — flagged stale in the winbar — until it parses again. `q` (or toggling again) closes it.
 - **Template diagnostics.** Errors from `chezmoi execute-template` surface as `vim.diagnostic` entries on write — template typos stop being invisible until apply fails.
 - **Commands.** `:ChezmoiApply` (buffer target or `!` for all; apply-on-save on by default), `:ChezmoiDiff`, `:ChezmoiTarget`, `:ChezmoiSource` (jump from a deployed file to its source; opt-in automatic redirect), `:ChezmoiPreview`, `:ChezmoiPick` (source-file picker: snacks / telescope / fzf-lua / mini.pick / `vim.ui.select`).
 - **Completion** ([blink.cmp](https://github.com/Saghen/blink.cmp)). Inside `{{ … }}`: template data keys from `chezmoi data` (icons reflect each value's type, docs preview the value), template/sprig/chezmoi functions, and Go template keywords. Outside actions: block snippets — `if`, `if/else`, `range`, `with`, `define`, `block`, comments — expanding to full `{{- … }}…{{- end }}` pairs.
 
-![:ChezmoiPreview — live rendered template in a split, re-rendered on write](assets/preview.gif)
+![:ChezmoiPreview — live rendered template in a split, re-rendered as you type](assets/preview.gif)
 
 Everything degrades gracefully: without the `chezmoi` binary you keep plain gotmpl highlighting and nothing errors.
 
@@ -113,6 +113,10 @@ require("chezmoi-template").setup({
   apply = {
     on_save = true,            -- chezmoi apply <target> after writing a source file
     notify = true,             -- notify on successful applies (failures always notify)
+  },
+  preview = {
+    live = true,               -- :ChezmoiPreview re-renders as you type (false = on write)
+    debounce = 150,             -- ms of idle before a live re-render
   },
   notify_on_open = false,      -- notify when opening a managed source file
   redirect = false,            -- opening a deployed managed file jumps to its source
