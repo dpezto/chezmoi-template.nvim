@@ -170,6 +170,6 @@ rangekv, with, define, block, comment) expanding to full
 6. HEALTH                                             *chezmoi-template-health*
 
 `:checkhealth chezmoi-template` verifies the chezmoi binary, the gotmpl
-treesitter parser, conform.nvim, and the configured encryption engine.
+treesitter parser, conform.nvim, and the encryption setup.
 
 vim:tw=78:ts=8:noet:ft=help:norl:

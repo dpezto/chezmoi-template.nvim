@@ -68,7 +68,7 @@ Everything else is per-feature and optional:
 | `%` matching | [vim-matchup](https://github.com/andymass/vim-matchup)                                                                                                                 |
 | Completion   | [blink.cmp](https://github.com/Saghen/blink.cmp) ≥ 0.13 (per-item kind icons/highlights); `markdown` + `markdown_inline` Tree-sitter parsers for type-highlighted docs |
 | Picker       | any of snacks / telescope / fzf-lua / mini.pick — falls back to `vim.ui.select`                                                                                        |
-| Encryption   | nothing extra with the default `engine = "chezmoi"` (chezmoi's own config drives age/rage/gpg); `engine = "tool"` needs an age-compatible binary on `$PATH`            |
+| Encryption   | nothing extra — delegates to `chezmoi decrypt` / `chezmoi encrypt`, so chezmoi's own config drives age/rage/builtin/gpg                                                |
 
 > Status: 0.1.0 — developed and tested on macOS and Linux (CI). Windows is untested; paths are handled with `vim.fs` but issues are likely, reports welcome.
 
@@ -215,7 +215,7 @@ keys = { { "<leader>sz", "<cmd>ChezmoiPick<cr>", desc = "Chezmoi source files" }
 
 What the plugin does by itself:
 
-- Decrypted buffers never persist plaintext: `swapfile`, `undofile` and swap are disabled, and writes go straight through the encryption engine (no plaintext temp file).
+- Decrypted buffers never persist plaintext: `swapfile`, `undofile` and swap are disabled, and writes go straight through `chezmoi encrypt` (no plaintext temp file).
 - Completion docs hide values of data keys matching `completion.mask` (default: `secret`, `token`, `passw`, `key`, `api`) — the key still completes, the value shows as `•••••`.
 
 What you should know:
@@ -247,7 +247,7 @@ What you should know:
 
 ## Health
 
-`:checkhealth chezmoi-template` verifies the chezmoi binary, gotmpl parser, conform, and the encryption engine.
+`:checkhealth chezmoi-template` verifies the chezmoi binary, gotmpl parser, conform, and the encryption setup.
 
 ## Development
 
