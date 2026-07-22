@@ -3,6 +3,8 @@ local M = {}
 
 local resolve = require("chezmoi-template.resolve")
 
+local uv = vim.uv or vim.loop
+
 -- Titled so nvim-notify/noice render a "chezmoi" toast; plain vim.notify
 -- ignores the opts and the messages still read fine bare.
 local function notify(msg, level)
@@ -61,39 +63,142 @@ local function open_scratch_split(lines, ft)
 end
 
 -- :ChezmoiPreview — render the current template via execute-template into a
--- vsplit typed as the target filetype; re-renders on every write while open.
--- Running it again closes the preview.
-local preview_state = {} -- src buf -> preview buf
+-- vsplit typed as the target filetype; re-renders live as you type (or on write
+-- when preview.live is false). Running it again closes the preview.
+-- state: src buf -> { dest, timer, tick, rendering, pending, live, slow_ms,
+--                     last_output, stale }
+local preview_state = {}
+
+-- Freeing a preview's window handle + debounce timer, from either the toggle-off
+-- path or when the dest buffer turns out to be gone.
+local function preview_teardown(src)
+  local st = preview_state[src]
+  if st and st.timer then
+    st.timer:stop()
+    st.timer:close()
+    st.timer = nil
+  end
+  preview_state[src] = nil
+end
+
+-- Flip the stale marker on the preview window's winbar. Shown when the template
+-- fails to render so the frozen last-valid output doesn't read as current. Only
+-- touches the window when the state actually changes.
+local function set_stale(st, dest, stale)
+  if st and st.stale == stale then
+    return
+  end
+  if st then
+    st.stale = stale
+  end
+  local win = vim.fn.bufwinid(dest)
+  if win ~= -1 then
+    vim.wo[win].winbar = stale and "%#WarningMsg#⚠ preview stale (invalid template)%*" or ""
+  end
+end
+
+-- Live re-rendering runs the whole template on every idle window; a template
+-- calling secret managers or the network can be slow. If a render blows past
+-- slow_ms, drop this preview to on-write so leaving it on can't hammer them.
+local function maybe_backoff(st, ms)
+  if not st or not st.live or st.slow_ms <= 0 or ms <= st.slow_ms then
+    return
+  end
+  st.live = false
+  if st.timer then
+    st.timer:stop()
+    st.timer:close()
+    st.timer = nil
+  end
+  notify(string.format("live preview paused (slow template, %dms) — updates on write", ms), vim.log.levels.WARN)
+end
 
 local function preview_render(src, dest)
+  local st = preview_state[src]
   local text = table.concat(vim.api.nvim_buf_get_lines(src, 0, -1, false), "\n") .. "\n"
+  local t0 = uv.hrtime()
+  if st then
+    st.rendering = true
+    st.tick = vim.api.nvim_buf_get_changedtick(src)
+  end
   resolve.execute_template(text, function(ret)
     vim.schedule(function()
+      if st then
+        st.rendering = false
+        -- Only back off if this is still the active preview (not one torn down
+        -- while its render was in flight).
+        if preview_state[src] == st then
+          maybe_backoff(st, (uv.hrtime() - t0) / 1e6)
+        end
+      end
       if not vim.api.nvim_buf_is_valid(dest) then
         return
       end
-      local lines
       if ret.code == 0 then
-        lines = vim.split(ret.stdout, "\n")
-        if lines[#lines] == "" then
-          table.remove(lines)
+        -- Skip the rewrite (redraw + treesitter reparse) when output is
+        -- unchanged — editing logic/comments/whitespace often renders identical.
+        if not st or ret.stdout ~= st.last_output then
+          local lines = vim.split(ret.stdout, "\n")
+          if lines[#lines] == "" then
+            table.remove(lines)
+          end
+          vim.bo[dest].modifiable = true
+          vim.api.nvim_buf_set_lines(dest, 0, -1, false, lines)
+          vim.bo[dest].modifiable = false
+          if st then
+            st.last_output = ret.stdout
+          end
         end
+        set_stale(st, dest, false)
       else
-        lines = vim.split("-- render failed --\n" .. (ret.stderr or ""), "\n")
+        -- Invalid template: keep the last valid render, flag it stale.
+        set_stale(st, dest, true)
       end
-      vim.bo[dest].modifiable = true
-      vim.api.nvim_buf_set_lines(dest, 0, -1, false, lines)
-      vim.bo[dest].modifiable = false
+      -- A change landed mid-render — re-run so the preview settles on it.
+      if st and st.pending then
+        st.pending = false
+        preview_render(src, dest)
+      end
     end)
   end)
+end
+
+-- Debounced re-render driver: collapses a burst of keystrokes into one spawn,
+-- skips redundant spawns when the buffer hasn't changed, and defers rather than
+-- stacking a spawn while one is already in flight.
+local function schedule_render(src)
+  local st = preview_state[src]
+  if not st or not st.timer then
+    return
+  end
+  local delay = require("chezmoi-template").config.preview.debounce
+  st.timer:stop()
+  st.timer:start(
+    delay,
+    0,
+    vim.schedule_wrap(function()
+      local s = preview_state[src]
+      if not s or not vim.api.nvim_buf_is_valid(s.dest) or not vim.api.nvim_buf_is_valid(src) then
+        return
+      end
+      if vim.api.nvim_buf_get_changedtick(src) == s.tick then
+        return -- nothing changed since the last render started
+      end
+      if s.rendering then
+        s.pending = true
+        return
+      end
+      preview_render(src, s.dest)
+    end)
+  )
 end
 
 local function preview_toggle()
   local src = vim.api.nvim_get_current_buf()
   local existing = preview_state[src]
-  if existing and vim.api.nvim_buf_is_valid(existing) then
-    vim.api.nvim_buf_delete(existing, { force = true })
-    preview_state[src] = nil
+  if existing and vim.api.nvim_buf_is_valid(existing.dest) then
+    vim.api.nvim_buf_delete(existing.dest, { force = true })
+    preview_teardown(src)
     return
   end
 
@@ -122,19 +227,52 @@ local function preview_toggle()
   end
   map_close(dest)
   vim.cmd.wincmd("p")
-  preview_state[src] = dest
 
-  vim.api.nvim_create_autocmd("BufWritePost", {
+  local cfg = require("chezmoi-template").config.preview
+  local st = {
+    dest = dest,
+    timer = cfg.live and uv.new_timer() or nil,
+    tick = -1,
+    rendering = false,
+    pending = false,
+    live = cfg.live,
+    slow_ms = cfg.slow_ms,
+    last_output = nil,
+    stale = false,
+  }
+  preview_state[src] = st
+
+  -- One autocmd on all three events: live edits debounce-render, and BufWritePost
+  -- renders once live has been dropped to on-write (config or backoff), so the
+  -- single callback covers both modes without re-registering.
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "BufWritePost" }, {
     group = "chezmoi-template.commands",
     buffer = src,
-    callback = function()
+    callback = function(ev)
       if not vim.api.nvim_buf_is_valid(dest) then
-        preview_state[src] = nil
+        preview_teardown(src)
         return true -- preview closed; drop the autocmd
       end
-      preview_render(src, dest)
+      if st.live then
+        if ev.event ~= "BufWritePost" then
+          schedule_render(src)
+        end
+      elseif ev.event == "BufWritePost" then
+        preview_render(src, dest)
+      end
     end,
   })
+
+  -- Closing the preview (q / :q) wipes dest — free the timer right away instead
+  -- of waiting for the next keystroke to notice.
+  vim.api.nvim_create_autocmd("BufWipeout", {
+    group = "chezmoi-template.commands",
+    buffer = dest,
+    callback = function()
+      preview_teardown(src)
+    end,
+  })
+
   preview_render(src, dest)
 end
 
@@ -195,7 +333,7 @@ local function define_commands()
   end, { desc = "jump from a deployed file to its chezmoi source" })
 
   vim.api.nvim_create_user_command("ChezmoiPreview", preview_toggle, {
-    desc = "toggle rendered preview of the current template (updates on write)",
+    desc = "toggle rendered preview of the current template (updates live as you type)",
   })
 
   vim.api.nvim_create_user_command("ChezmoiPick", function()
