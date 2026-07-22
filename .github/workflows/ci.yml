@@ -42,7 +42,7 @@ jobs:
           luarocks --lua-version 5.1 --tree "$HOME/.luarocks" install luacov-reporter-lcov
           export LUA_PATH="$HOME/.luarocks/share/lua/5.1/?.lua;$HOME/.luarocks/share/lua/5.1/?/init.lua;;"
           COVERAGE=1 make test
-          lua5.1 "$HOME/.luarocks/bin/luacov" -r lcov
+          "$HOME/.luarocks/bin/luacov" -r lcov
           sed -i "s|^SF:$GITHUB_WORKSPACE/|SF:|" luacov.report.out
       - if: matrix.neovim == 'stable'
         uses: coverallsapp/github-action@v2
