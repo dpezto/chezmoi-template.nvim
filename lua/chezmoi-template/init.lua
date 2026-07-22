@@ -4,7 +4,11 @@ M.config = {
   -- nil = auto-detect via `chezmoi source-path`
   source_dir = nil,
   -- treesitter injection of the deployed target language into *.tmpl buffers
-  inject = { enabled = true },
+  inject = {
+    enabled = true,
+    -- lua patterns for source paths to leave as plain gotmpl (no target injection)
+    exclude = {},
+  },
   -- conform.nvim formatter that formats templates as their target filetype
   format = {
     enabled = true,
@@ -14,8 +18,9 @@ M.config = {
   },
   -- resolve chezmoi source names to target icons in mini.icons
   icons = { enabled = true },
-  -- run `chezmoi apply <target>` after writing a managed source file
-  apply = { on_save = true, notify = true },
+  -- run `chezmoi apply <target>` after writing a managed source file.
+  -- force = pass --force (skip chezmoi's prompt on externally-modified targets).
+  apply = { on_save = true, notify = true, force = false },
   -- :Chezmoi preview rendered preview. live = re-render as you type (debounced,
   -- ms); false = re-render on write only. Invalid syntax keeps the last valid
   -- render until it parses again. slow_ms: if a render takes longer than this,
@@ -46,7 +51,7 @@ M.config = {
 
 -- Static subcommand names for pre-activation tab-completion; the real command
 -- (commands.lua) derives its own from the handler table. Kept in sync by hand.
-local SUBCOMMANDS = { "apply", "diff", "pick", "preview", "source", "target" }
+local SUBCOMMANDS = { "apply", "diff", "edit", "pick", "preview", "source", "target" }
 
 -- setup() is cheap: it only registers filetype detection, the treesitter
 -- injection directive, and light triggers. The heavy work (module requires,
@@ -172,6 +177,25 @@ function M._activate()
       end, 100)
     end,
   })
+end
+
+-- Public API for integrations (statuslines, custom pickers, scripts).
+
+-- All managed files as { source = <abs>, target = <abs> } pairs.
+function M.list()
+  M._activate()
+  return require("chezmoi-template.resolve").list()
+end
+
+-- Open the chezmoi source file for a deploy target path.
+function M.edit(target)
+  M._activate()
+  local src = require("chezmoi-template.resolve").source_path(vim.fn.expand(target))
+  if not src then
+    vim.notify(target .. " is not chezmoi-managed", vim.log.levels.WARN, { title = "chezmoi" })
+    return
+  end
+  vim.cmd.edit(vim.fn.fnameescape(src))
 end
 
 return M

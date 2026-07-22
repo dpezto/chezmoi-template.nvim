@@ -304,6 +304,13 @@ eq(
   "/src/.config/secrets.json"
 )
 eq("resolve_path relative stays relative", resolve.resolve_path("dot_config/foo.toml.tmpl"), ".config/foo.toml")
+eq("resolve_path symlink_", resolve.resolve_path("symlink_dot_foo"), ".foo")
+eq("resolve_path create_", resolve.resolve_path("create_dot_bar"), ".bar")
+eq("resolve_path modify_", resolve.resolve_path("modify_dot_baz.tmpl"), ".baz")
+eq("resolve_path remove_", resolve.resolve_path("remove_dot_qux"), ".qux")
+-- literal_ ends attribute parsing: dot_ stays literal (matches real chezmoi)
+eq("resolve_path literal_ keeps rest verbatim", resolve.resolve_path("literal_dot_quux"), "dot_quux")
+eq("resolve_path prefix before literal_ still strips", resolve.resolve_path("private_literal_dot_q"), "dot_q")
 eq("invalidate clears without error", pcall(resolve.invalidate), true)
 
 -- formatter resolves target ft from the buffer name when unseeded (BufNewFile)
@@ -335,6 +342,7 @@ local SRC = vim.fn.getcwd() .. "/tests" -- source_dir configured in minimal_init
 
 local fake = {} -- subcommand -> canned vim.system result
 local spawns = {} -- subcommand -> call count
+local sent = {} -- subcommand -> full cmd array of the last spawn (for flag asserts)
 local real_system = vim.system
 ---@diagnostic disable-next-line: duplicate-set-field
 vim.system = function(cmd, _, cb)
@@ -343,6 +351,7 @@ vim.system = function(cmd, _, cb)
   end
   local key = cmd[2]
   spawns[key] = (spawns[key] or 0) + 1
+  sent[key] = cmd
   local ret = vim.deepcopy(fake[key] or { code = 1, stdout = "", stderr = "no fake for " .. key })
   if cb then
     cb(ret)
@@ -754,6 +763,59 @@ do
   vim.health = real_health
   eq("health reports run", #reports >= 4, true)
   eq("health mentions chezmoi binary", reports[2]:find("chezmoi executable", 1, true) ~= nil, true)
+end
+
+-- apply.force appends --force to the apply command
+do
+  local fb = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_buf_set_name(fb, SRC .. "/dot_force.tmpl")
+  vim.api.nvim_set_current_buf(fb)
+  fake["apply"] = { code = 0, stdout = "" }
+  fake["target-path"] = { code = 0, stdout = SRC .. "/.force\n" }
+  ct.config.apply.force = true
+  clear_notes()
+  vim.cmd("Chezmoi apply")
+  vim.wait(1000, function()
+    return has_note("applied")
+  end)
+  eq("apply.force passes --force", vim.tbl_contains(sent["apply"], "--force"), true)
+  ct.config.apply.force = false
+  vim.api.nvim_buf_delete(fb, { force = true })
+end
+
+-- list() pairs each target (from `managed --path-style absolute`) with its
+-- source (from a single `source-path <t1> <t2> …` spawn, emitted in arg order).
+do
+  fake["managed"] = { code = 0, stdout = "/home/u/.zshrc\n/home/u/.gitconfig\n" }
+  fake["source-path"] = { code = 0, stdout = SRC .. "/dot_zshrc.tmpl\n" .. SRC .. "/dot_gitconfig\n" }
+  resolve.invalidate()
+  local files = ct.list()
+  eq("list returns one entry per managed file", #files, 2)
+  eq("list pairs source with its target", files[1].source, SRC .. "/dot_zshrc.tmpl")
+  eq("list carries target", files[1].target, "/home/u/.zshrc")
+  eq("list keeps arg order for the second entry", files[2].source, SRC .. "/dot_gitconfig")
+end
+
+-- edit(target) opens the resolved source file
+do
+  fake["source-path"] = { code = 0, stdout = SRC .. "/dot_gitconfig.tmpl\n" }
+  ct.edit("~/.gitconfig")
+  eq("edit opens the resolved source", vim.api.nvim_buf_get_name(0), SRC .. "/dot_gitconfig.tmpl")
+end
+
+-- inject.exclude leaves matching source paths as plain gotmpl (no target lang)
+do
+  fake["managed"] = { code = 0, stdout = "" } -- empty set -> name-based ft fallback
+  resolve.invalidate()
+  ct.config.inject.exclude = { "excluded%.json%.tmpl" }
+  local xb = vim.api.nvim_create_buf(false, true)
+  require("chezmoi-template.inject").seed_buffer(xb, SRC .. "/dot_excluded.json.tmpl")
+  eq("inject.exclude skips target injection", vim.b[xb].chezmoi_target_lang, nil)
+  eq("inject.exclude skips target ft", vim.b[xb].chezmoi_target_ft, nil)
+  local yb = vim.api.nvim_create_buf(false, true)
+  require("chezmoi-template.inject").seed_buffer(yb, SRC .. "/dot_included.json.tmpl")
+  eq("non-excluded still seeds target ft", vim.b[yb].chezmoi_target_ft, "json")
+  ct.config.inject.exclude = {}
 end
 
 -- flush coverage stats before exit (`nvim -l` may skip luacov's exit hook)
