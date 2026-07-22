@@ -46,6 +46,12 @@ function M.seed_buffer(buf, file)
   if not resolve.is_managed(file) then
     return
   end
+  -- Excluded paths stay plain gotmpl (no target-language injection).
+  for _, pat in ipairs(require("chezmoi-template").config.inject.exclude) do
+    if file:match(pat) then
+      return
+    end
+  end
   -- No deploy target (.chezmoitemplates/ partials, .chezmoiscripts/):
   -- infer from the attribute-stripped basename (run_once_foo.sh.tmpl -> foo.sh).
   -- The prefetched source set (one spawn per session) skips the doomed

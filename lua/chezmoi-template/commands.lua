@@ -22,6 +22,9 @@ end
 -- chezmoi apply, whole state or a single target (async)
 local function apply(target)
   local cmd = { "chezmoi", "apply" }
+  if require("chezmoi-template").config.apply.force then
+    table.insert(cmd, "--force")
+  end
   if target then
     table.insert(cmd, target)
   end
@@ -338,11 +341,33 @@ local subcommands = {
       if resolve.is_managed(file) then
         return notify("already in the chezmoi source directory")
       end
-      local ret = vim.system({ "chezmoi", "source-path", file }, { text = true }):wait()
-      if ret.code ~= 0 then
+      local src = resolve.source_path(file)
+      if not src then
         return notify("not a chezmoi-managed file", vim.log.levels.WARN)
       end
-      vim.cmd.edit(vim.fn.fnameescape(vim.trim(ret.stdout)))
+      vim.cmd.edit(vim.fn.fnameescape(src))
+    end,
+  },
+
+  edit = {
+    desc = "open the chezmoi source for a target path",
+    run = function(ctx)
+      local target = ctx.fargs[1]
+      if not target or target == "" then
+        return notify("usage: :Chezmoi edit <target>", vim.log.levels.WARN)
+      end
+      require("chezmoi-template").edit(target)
+    end,
+    complete = function(arglead)
+      local expanded = vim.fn.expand(arglead)
+      local out = {}
+      for t in pairs(resolve.managed_set()) do -- cached absolute target paths
+        if arglead == "" or t:find(expanded, 1, true) == 1 then
+          out[#out + 1] = t
+        end
+      end
+      table.sort(out)
+      return out
     end,
   },
 
@@ -369,12 +394,19 @@ local function define_commands()
     if not entry then
       return notify(("usage: :Chezmoi <%s>"):format(table.concat(sub_names, "|")), vim.log.levels.WARN)
     end
-    entry.run({ bang = o.bang })
+    entry.run({ bang = o.bang, fargs = vim.list_slice(o.fargs, 2) })
   end, {
     bang = true,
     nargs = "*",
     desc = "chezmoi-template",
-    complete = function(arglead)
+    complete = function(arglead, cmdline)
+      -- Word 2 is the subcommand; past it, delegate to its value completion.
+      local words = vim.split(vim.trim(cmdline), "%s+")
+      local sub = words[2]
+      local entry = sub and subcommands[sub]
+      if entry and entry.complete and (sub ~= arglead) then
+        return entry.complete(arglead)
+      end
       return vim.tbl_filter(function(n)
         return n:find(arglead, 1, true) == 1
       end, sub_names)
@@ -431,11 +463,10 @@ function M.setup()
         if not resolve.managed_set()[abs] then
           return
         end
-        local ret = vim.system({ "chezmoi", "source-path", abs }, { text = true }):wait()
-        if ret.code ~= 0 then
+        local src = resolve.source_path(abs)
+        if not src then
           return
         end
-        local src = vim.trim(ret.stdout)
         vim.schedule(function()
           if vim.api.nvim_get_current_buf() == ctx.buf then
             vim.cmd.edit(vim.fn.fnameescape(src))

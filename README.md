@@ -46,7 +46,7 @@ Most chezmoi integrations wrap the `chezmoi edit` CLI: temporary buffers, watche
 - **`%` matching for template delimiters** ([vim-matchup](https://github.com/andymass/vim-matchup)). `{{ if }}` ⇄ `{{ else }}` ⇄ `{{ end }}`, including `{{-` trim markers.
 - **Live template preview.** `:Chezmoi preview` renders the buffer through `chezmoi execute-template` into a split typed as the target filetype, re-rendered live as you type (debounced). Invalid syntax keeps the last valid render — flagged stale in the winbar — until it parses again. `q` (or toggling again) closes it.
 - **Template diagnostics.** Errors from `chezmoi execute-template` surface as `vim.diagnostic` entries on write — template typos stop being invisible until apply fails.
-- **Commands.** One `:Chezmoi` command with subcommands (tab-completed): `apply` (buffer target, or `:Chezmoi! apply` for all; apply-on-save on by default), `diff`, `target` (`:Chezmoi! target` opens the deployed file), `source` (jump from a deployed file to its source; opt-in automatic redirect), `preview`, `pick` (source-file picker: snacks / telescope / fzf-lua / mini.pick / `vim.ui.select`).
+- **Commands.** One `:Chezmoi` command with subcommands (tab-completed): `apply` (buffer target, or `:Chezmoi! apply` for all; apply-on-save on by default), `diff`, `target` (`:Chezmoi! target` opens the deployed file), `source` (jump from a deployed file to its source; opt-in automatic redirect), `edit` (`:Chezmoi edit <target>` opens the source for any deploy target, tab-completing target paths), `preview`, `pick` (source-file picker: snacks / telescope / fzf-lua / mini.pick / `vim.ui.select`).
 - **Completion** ([blink.cmp](https://github.com/Saghen/blink.cmp)). Context-aware inside `{{ … }}` via the gotmpl treesitter tree: after a dot (`.foo`) it offers only data keys from `chezmoi data` (icons reflect each value's type, docs preview the value); at command position it adds template/sprig/chezmoi functions and Go template keywords; inside string literals it stays quiet. Outside actions: block snippets — `if`, `if/else`, `range`, `with`, `define`, `block`, comments — expanding to full `{{- … }}…{{- end }}` pairs. Falls back to a line heuristic when the gotmpl parser isn't installed.
 
 ![:Chezmoi preview — live rendered template in a split, re-rendered as you type](assets/preview.gif)
@@ -104,7 +104,10 @@ Defaults:
 ```lua
 require("chezmoi-template").setup({
   source_dir = nil,            -- nil = auto-detect via `chezmoi source-path`
-  inject = { enabled = true }, -- treesitter injection of the target language
+  inject = {
+    enabled = true,            -- treesitter injection of the target language
+    exclude = {},              -- lua patterns for source paths to leave as plain gotmpl
+  },
   format = {
     enabled = true,            -- conform formatter registration
     indent_directives = true,  -- depth-pad column-0 `{{-` directive blocks
@@ -113,6 +116,7 @@ require("chezmoi-template").setup({
   apply = {
     on_save = true,            -- chezmoi apply <target> after writing a source file
     notify = true,             -- notify on successful applies (failures always notify)
+    force = false,             -- pass --force (skip chezmoi's prompt on modified targets)
   },
   preview = {
     live = true,               -- :Chezmoi preview re-renders as you type (false = on write)
@@ -214,6 +218,20 @@ The source only activates in gotmpl buffers. Inside `{{ … }}` it narrows by cu
 ```lua
 keys = { { "<leader>sz", "<cmd>Chezmoi pick<cr>", desc = "Chezmoi source files" } },
 ```
+
+## Lua API
+
+For statuslines, custom pickers, or scripts:
+
+```lua
+-- every managed file as { source = <abs>, target = <abs> } pairs
+local files = require("chezmoi-template").list()
+
+-- open the chezmoi source for a deploy target (~ is expanded)
+require("chezmoi-template").edit("~/.zshrc")
+```
+
+`edit(target)` is the programmatic form of `:Chezmoi edit <target>`.
 
 ## Secrets
 

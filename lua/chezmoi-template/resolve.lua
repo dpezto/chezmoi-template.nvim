@@ -23,13 +23,25 @@ function M.resolve_path(name)
   end
   local parts = {}
   for part in name:sub(#prefix + 1):gmatch("[^/]+") do
+    -- literal_ ends attribute parsing: strip it and take the rest verbatim
+    -- (chezmoi does NOT interpret dot_/.tmpl/etc. after it — literal_dot_x -> dot_x).
+    local literal = false
     local changed = true
     while changed do
       changed = false
+      if part:match("^literal_") then
+        part = part:sub(#"literal_" + 1)
+        literal = true
+        break
+      end
       local new_part = part
         :gsub("^private_", "")
         :gsub("^readonly_", "")
         :gsub("^executable_", "")
+        :gsub("^create_", "")
+        :gsub("^modify_", "")
+        :gsub("^remove_", "")
+        :gsub("^symlink_", "")
         :gsub("^run_once_", "")
         :gsub("^run_onchange_", "")
         :gsub("^run_", "")
@@ -41,7 +53,9 @@ function M.resolve_path(name)
         changed = true
       end
     end
-    part = part:gsub("^dot_", "."):gsub("%.age$", ""):gsub("%.asc$", ""):gsub("%.tmpl$", "")
+    if not literal then
+      part = part:gsub("^dot_", "."):gsub("%.age$", ""):gsub("%.asc$", ""):gsub("%.tmpl$", "")
+    end
     table.insert(parts, part)
   end
   return prefix .. table.concat(parts, "/")
@@ -172,6 +186,63 @@ function M.source_set()
     source_set_cache = managed_listing("source-absolute") or false
   end
   return source_set_cache or nil
+end
+
+-- Ordered array of normalized paths for a managed listing style, or nil.
+local function managed_array(style)
+  if not M.has_chezmoi() then
+    return nil
+  end
+  local ret = vim.system({ "chezmoi", "managed", "--path-style", style, "--include", "files" }, { text = true }):wait()
+  if ret.code ~= 0 then
+    return nil
+  end
+  local arr = {}
+  for line in ret.stdout:gmatch("[^\n]+") do
+    arr[#arr + 1] = vim.fs.normalize(line)
+  end
+  return arr
+end
+
+-- Public: all managed files as { source = <abs>, target = <abs> } pairs.
+-- `managed` sorts the two path-styles by different keys, so they can't be
+-- zipped by index; instead resolve every target's source in one
+-- `source-path <t1> <t2> …` spawn, which emits sources in argument order.
+-- Uncached (rare call).
+function M.list()
+  local targets = managed_array("absolute")
+  if not targets or #targets == 0 then
+    return {}
+  end
+  -- ponytail: all targets in one argv; fine for normal repos, could hit ARG_MAX
+  -- with thousands of long paths — batch if that ever bites.
+  local cmd = { "chezmoi", "source-path" }
+  vim.list_extend(cmd, targets)
+  local ret = vim.system(cmd, { text = true }):wait()
+  if ret.code ~= 0 then
+    return {}
+  end
+  local sources = {}
+  for line in ret.stdout:gmatch("[^\n]+") do
+    sources[#sources + 1] = vim.fs.normalize(line)
+  end
+  local out = {}
+  for i, target in ipairs(targets) do
+    out[i] = { source = sources[i], target = target }
+  end
+  return out
+end
+
+-- Source path for a deploy target via `chezmoi source-path`, or nil.
+function M.source_path(target)
+  if not M.has_chezmoi() then
+    return nil
+  end
+  local ret = vim.system({ "chezmoi", "source-path", target }, { text = true }):wait()
+  if ret.code ~= 0 then
+    return nil
+  end
+  return vim.trim(ret.stdout)
 end
 
 -- Render template text through `chezmoi execute-template` (async).
