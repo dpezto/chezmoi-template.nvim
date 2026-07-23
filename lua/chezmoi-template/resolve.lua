@@ -11,16 +11,21 @@ end
 -- the deployed target path (e.g. private_dot_zshrc.tmpl -> .zshrc). Pure string
 -- transform: works without the chezmoi binary and on paths outside the source dir.
 function M.resolve_path(name)
-  -- normalize converts `\` to `/` on Windows; a drive-letter root ("C:/")
-  -- must survive as a prefix, not be attribute-stripped as a path component
+  -- normalize converts `\` to `/` on Windows. The path root must survive as a
+  -- prefix, not be attribute-stripped as a path component: a drive letter
+  -- ("C:/"), a UNC share ("//server/share"), or the POSIX root ("/"). The
+  -- drive/UNC matches can't hit a normal Unix path (those begin with "/"), so
+  -- this needs no has("win32") gate and stays exercised on the Linux/macOS CI.
   name = vim.fs.normalize(name)
-  local prefix = ""
-  if vim.fn.has("win32") == 1 then
-    prefix = name:match("^%a:/") or ""
-  end
-  if prefix == "" and name:sub(1, 1) == "/" then
-    prefix = "/"
-  end
+  -- The prefix must end in "/" so `prefix .. concat(parts, "/")` keeps the
+  -- separator (gmatch drops the leading slash of the remainder). "C:/" and "/"
+  -- already do; the UNC root is captured with its trailing slash for the same
+  -- reason (a bare "//server/share" with no file under it is not a real source
+  -- path — source_dir always has a trailing slash).
+  local prefix = name:match("^%a:/") -- C:/…
+    or name:match("^//[^/]+/[^/]+/") -- //server/share/ (UNC root)
+    or (name:sub(1, 1) == "/" and "/") -- POSIX root
+    or ""
   local parts = {}
   for part in name:sub(#prefix + 1):gmatch("[^/]+") do
     -- literal_ ends attribute parsing: strip it and take the rest verbatim
@@ -242,7 +247,8 @@ function M.source_path(target)
   if ret.code ~= 0 then
     return nil
   end
-  return vim.trim(ret.stdout)
+  -- normalize to forward slashes, consistent with every other path this module returns
+  return vim.fs.normalize(vim.trim(ret.stdout))
 end
 
 -- Render template text through `chezmoi execute-template` (async).

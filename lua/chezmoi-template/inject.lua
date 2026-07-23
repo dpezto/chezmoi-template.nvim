@@ -46,9 +46,12 @@ function M.seed_buffer(buf, file)
   if not resolve.is_managed(file) then
     return
   end
-  -- Excluded paths stay plain gotmpl (no target-language injection).
+  -- Excluded paths stay plain gotmpl (no target-language injection). Match the
+  -- normalized (forward-slash) path so patterns are portable across OSes — a
+  -- raw autocmd path is backslashed on Windows and would dodge "/"-style patterns.
+  local nfile = vim.fs.normalize(file)
   for _, pat in ipairs(require("chezmoi-template").config.inject.exclude) do
-    if file:match(pat) then
+    if nfile:match(pat) then
       return
     end
   end

@@ -29,9 +29,11 @@ jobs:
           args: --check lua plugin tests
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         neovim: [stable, nightly]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -39,10 +41,13 @@ jobs:
         with:
           neovim: true
           version: ${{ matrix.neovim }}
-      - if: matrix.neovim == 'nightly'
-        run: make test
+      # Run nvim directly (no GNU Make dependency, which Windows runners lack);
+      # equivalent to `make test`. The ubuntu+stable leg instead runs under luacov.
+      - if: ${{ !(matrix.os == 'ubuntu-latest' && matrix.neovim == 'stable') }}
+        name: test
+        run: nvim --headless --clean -u tests/minimal_init.lua -l tests/run.lua
       # stable leg runs the same tests under luacov (Neovim is LuaJIT = Lua 5.1)
-      - if: matrix.neovim == 'stable'
+      - if: matrix.os == 'ubuntu-latest' && matrix.neovim == 'stable'
         name: test with coverage
         run: |
           sudo apt-get update -q
@@ -53,7 +58,7 @@ jobs:
           COVERAGE=1 make test
           "$HOME/.luarocks/bin/luacov" -r lcov
           sed -i "s|^SF:$GITHUB_WORKSPACE/|SF:|" luacov.report.out
-      - if: matrix.neovim == 'stable'
+      - if: matrix.os == 'ubuntu-latest' && matrix.neovim == 'stable'
         uses: coverallsapp/github-action@5cbfd81b66ca5d10c19b062c04de0199c215fb6e # v2
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -70,7 +70,7 @@ Everything else is per-feature and optional:
 | Picker       | any of snacks / telescope / fzf-lua / mini.pick — falls back to `vim.ui.select`                                                                                        |
 | Encryption   | nothing extra — delegates to `chezmoi decrypt` / `chezmoi encrypt`, so chezmoi's own config drives age/rage/builtin/gpg                                                |
 
-> Status: 0.1.0 — developed and tested on macOS and Linux (CI). Windows is untested; paths are handled with `vim.fs` but issues are likely, reports welcome.
+> Status: 0.1.0 — developed and tested on macOS, Linux, and Windows (CI). Every path is normalized through `vim.fs`, and the test suite runs on `windows-latest` alongside Linux. Windows support is newer than the Unix support, so reports are still welcome.
 
 ## Installation
 
@@ -106,7 +106,7 @@ require("chezmoi-template").setup({
   source_dir = nil,            -- nil = auto-detect via `chezmoi source-path`
   inject = {
     enabled = true,            -- treesitter injection of the target language
-    exclude = {},              -- lua patterns for source paths to leave as plain gotmpl
+    exclude = {},              -- lua patterns (matched on the normalized "/" path) to leave as plain gotmpl
   },
   format = {
     enabled = true,            -- conform formatter registration
@@ -132,7 +132,7 @@ require("chezmoi-template").setup({
   picker = nil,                -- "snacks"|"telescope"|"fzf-lua"|"mini"|"select"; nil = auto
   encryption = {
     enabled = false,           -- opt-in; delegates to chezmoi decrypt/encrypt
-    exclude = {},              -- lua patterns for *.age paths to leave untouched
+    exclude = {},              -- lua patterns (matched on the normalized "/" path) for *.age paths to leave untouched
   },
 })
 ```

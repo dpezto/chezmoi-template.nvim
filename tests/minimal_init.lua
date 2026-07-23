@@ -21,4 +21,6 @@ package.preload["conform"] = function()
   return M
 end
 
-require("chezmoi-template").setup({ source_dir = vim.fn.getcwd() .. "/tests" })
+-- normalize getcwd so the source dir uses forward slashes on Windows too
+-- (matches how resolve.lua normalizes both sides of every path compare)
+require("chezmoi-template").setup({ source_dir = vim.fs.normalize(vim.fn.getcwd()) .. "/tests" })
