@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/dpezto/chezmoi-template.nvim/compare/v1.1.0...v1.2.0) (2026-07-23)
+
+
+### Features
+
+* **picker:** plugin-built entries with target names, excludes, injected previews ([#15](https://github.com/dpezto/chezmoi-template.nvim/issues/15)) ([2a48bf0](https://github.com/dpezto/chezmoi-template.nvim/commit/2a48bf0f727f25c99aaf387a27e5c3243b70ffd9))
+
 ## [1.1.0](https://github.com/dpezto/chezmoi-template.nvim/compare/v1.0.0...v1.1.0) (2026-07-23)
 
 
