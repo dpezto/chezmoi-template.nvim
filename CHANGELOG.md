@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0](https://github.com/dpezto/chezmoi-template.nvim/compare/v1.0.0...v1.1.0) (2026-07-23)
+
+
+### Features
+
+* close gaps vs chezmoi.nvim / chezmoi.vim ([#12](https://github.com/dpezto/chezmoi-template.nvim/issues/12)) ([312b7cb](https://github.com/dpezto/chezmoi-template.nvim/commit/312b7cbb0c56040e6878d693e96f2c10e8df2639))
+
+
+### Bug Fixes
+
+* harden path handling for Windows + add windows CI ([#13](https://github.com/dpezto/chezmoi-template.nvim/issues/13)) ([748a0d1](https://github.com/dpezto/chezmoi-template.nvim/commit/748a0d11d85036b359ebd4fd2e26c6074267d9c6))
+
 ## [1.0.0](https://github.com/dpezto/chezmoi-template.nvim/compare/v0.2.0...v1.0.0) (2026-07-22)
 
 
