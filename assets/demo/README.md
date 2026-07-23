@@ -40,6 +40,11 @@ custom variable renders and shows up in completion.
 - **`dot_zshrc.tmpl`** — clean, valid; built-in `.chezmoi.*` data plus the
   `is_lowmem` demo variable. Drives all five shots: injection, preview,
   completion, picker, and format (`:%left` mangle, then format).
+- `setup.sh` also generates a handful of extra source files for the picker
+  shot: nested `dot_config/`, a `private_` file, a `.chezmoiscripts/run_once_`
+  script (shown attribute-stripped as `install-packages.sh`), `.chezmoiignore`,
+  and a `.chezmoi.toml.tmpl` that must NOT appear in the list (hidden by the
+  picker's default excludes).
 
 ## Notes
 

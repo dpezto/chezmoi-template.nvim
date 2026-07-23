@@ -15,11 +15,11 @@ local function decrypt(file)
   -- No text=true: decode raw bytes so line endings (and any binary payload)
   -- round-trip byte-for-byte, symmetric with encrypt() below. text=true would
   -- strip CR from a CRLF config and silently rewrite it to LF on save.
-  return vim.system({ "chezmoi", "decrypt", file }):wait()
+  return resolve.chezmoi({ "decrypt", file }, {}):wait()
 end
 
 local function encrypt(text, file)
-  local ret = vim.system({ "chezmoi", "encrypt" }, { stdin = text }):wait()
+  local ret = resolve.chezmoi({ "encrypt" }, { stdin = text }):wait()
   if ret.code == 0 then
     local out = io.open(file, "wb")
     if not out then
@@ -39,7 +39,7 @@ end
 local function read_post(args)
   local ret = decrypt(args.file)
   if ret.code ~= 0 then
-    vim.notify("decryption failed:\n" .. (ret.stderr or ""), vim.log.levels.ERROR, { title = "chezmoi" })
+    require("chezmoi-template").notify("decryption failed:\n" .. (ret.stderr or ""), vim.log.levels.ERROR)
     return
   end
 
@@ -80,7 +80,7 @@ local function write_cmd(args)
     vim.bo[args.buf].modified = false
     vim.api.nvim_exec_autocmds("BufWritePost", { buffer = args.buf, modeline = false })
   else
-    vim.notify("error saving file:\n" .. (ret.stderr or ""), vim.log.levels.ERROR, { title = "chezmoi" })
+    require("chezmoi-template").notify("error saving file:\n" .. (ret.stderr or ""), vim.log.levels.ERROR)
   end
 end
 

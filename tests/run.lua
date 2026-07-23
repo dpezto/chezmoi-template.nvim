@@ -319,6 +319,18 @@ if vim.fn.has("win32") == 1 then
     "//server/share/.config/foo.toml"
   )
 end
+-- scripts: run_[once_|onchange_][before_|after_]name — before_/after_ strip
+-- only after a run_ prefix, never on regular files
+eq(
+  "resolve_path script once+after",
+  resolve.resolve_path(".chezmoiscripts/run_once_after_installer.sh.tmpl"),
+  ".chezmoiscripts/installer.sh"
+)
+eq("resolve_path script onchange+before", resolve.resolve_path("run_onchange_before_setup.sh"), "setup.sh")
+eq("resolve_path script bare before", resolve.resolve_path("run_before_init.sh"), "init.sh")
+eq("resolve_path before_ not an attr on plain files", resolve.resolve_path("before_notes.txt"), "before_notes.txt")
+eq("resolve_path external_ dir", resolve.resolve_path("external_dot_oh-my-zsh/plugins.zsh"), ".oh-my-zsh/plugins.zsh")
+eq("resolve_path .literal stops suffix parsing", resolve.resolve_path("dot_config.tmpl.literal"), ".config.tmpl")
 eq("resolve_path symlink_", resolve.resolve_path("symlink_dot_foo"), ".foo")
 eq("resolve_path create_", resolve.resolve_path("create_dot_bar"), ".bar")
 eq("resolve_path modify_", resolve.resolve_path("modify_dot_baz.tmpl"), ".baz")
@@ -550,6 +562,7 @@ do
   end)
   eq("preview renders template output", vim.api.nvim_buf_get_lines(dest, 0, -1, false), { "rendered ok" })
   eq("preview buffer typed as target ft", vim.bo[dest].filetype, "zsh")
+  eq("preview default split is vertical", vim.fn.winlayout()[1], "row")
 
   -- editing the source (bumps changedtick) drives a debounced live re-render
   fake["execute-template"] = { code = 0, stdout = "re-rendered\n" }
@@ -583,6 +596,14 @@ do
   vim.api.nvim_set_current_buf(tb)
   vim.cmd("Chezmoi preview")
   eq("preview toggles closed", vim.api.nvim_buf_is_valid(dest), false)
+
+  -- preview.split = "horizontal" opens a horizontal split instead
+  ct.config.preview.split = "horizontal"
+  fake["execute-template"] = { code = 0, stdout = "rendered ok\n" }
+  vim.cmd("Chezmoi preview")
+  eq("preview split honors horizontal", vim.fn.winlayout()[1], "col")
+  vim.cmd("Chezmoi preview") -- toggle closed again
+  ct.config.preview.split = "vertical"
 
   clear_notes()
   local plain = vim.api.nvim_create_buf(true, false)
@@ -635,17 +656,70 @@ do
   eq("Chezmoi source inside source dir just notifies", has_note("already in the chezmoi source directory"), true)
 end
 
--- :Chezmoi pick with the vim.ui.select fallback backend
+-- picker entries: build() (pure), walk() (real fs), seed_preview, and the
+-- vim.ui.select fallback backend with the pre-1.2 string-shorthand config
 do
+  local picker = require("chezmoi-template.picker")
+
+  -- build(): exclude filtering + display mapping, sorted by display
+  local rels = { "dot_zshrc.tmpl", ".chezmoi.toml.tmpl", ".git/config", ".chezmoidata.yaml", ".chezmoiignore" }
+  local built = picker.build(rels, SRC .. "/", { display = "target", exclude = picker.DEFAULT_EXCLUDE })
+  eq("build hides internals, keeps .chezmoiignore", {
+    built[1] and built[1].display,
+    built[2] and built[2].display,
+    built[3],
+  }, { ".chezmoiignore", ".zshrc", nil })
+  eq("build joins abs source path", built[2].abs, SRC .. "/dot_zshrc.tmpl")
+  eq(
+    "build source display keeps raw name",
+    picker.build({ "dot_zshrc.tmpl" }, SRC .. "/", { display = "source", exclude = {} })[1].display,
+    "dot_zshrc.tmpl"
+  )
+  local coll = picker.build({ "dot_foo", "dot_foo.tmpl" }, SRC .. "/", { display = "target", exclude = {} })
+  eq("build disambiguates display collisions", { coll[1].display, coll[2].display }, { ".foo", ".foo (dot_foo.tmpl)" })
+
+  -- walk(): source-relative files, .git pruned
+  vim.fn.mkdir(SRC .. "/pick_walk/.git", "p")
+  local wf = assert(io.open(SRC .. "/pick_walk/dot_walkme.tmpl", "w"))
+  wf:write("hi\n")
+  wf:close()
+  local gf = assert(io.open(SRC .. "/pick_walk/.git/config", "w"))
+  gf:write("x\n")
+  gf:close()
+  local walked = picker.walk(SRC .. "/")
+  eq("walk finds source-relative files", vim.tbl_contains(walked, "pick_walk/dot_walkme.tmpl"), true)
+  eq("walk prunes .git directories", vim.tbl_contains(walked, "pick_walk/.git/config"), false)
+  vim.fn.delete(SRC .. "/pick_walk", "rf")
+
+  -- _seed_preview: clears stale vars, reseeds from the entry's source path
+  fake["managed"] = { code = 0, stdout = "" } -- empty source set -> name fallback
+  resolve.invalidate()
+  local pv = vim.api.nvim_create_buf(false, true)
+  vim.b[pv].chezmoi_target_ft = "stale"
+  picker._seed_preview(pv, SRC .. "/dot_profile.tmpl")
+  eq("seed_preview seeds preview buffer ft", vim.b[pv].chezmoi_target_ft, "sh")
+  picker._seed_preview(pv, "/outside/dot_x.tmpl")
+  eq("seed_preview clears stale vars for unmanaged paths", vim.b[pv].chezmoi_target_ft, nil)
+
+  -- select fallback via the string shorthand (kept file reused by the
+  -- backend-stub block below, which removes it)
+  local pick_me = SRC .. "/dot_pick_me.tmpl"
+  local pmf = assert(io.open(pick_me, "w"))
+  pmf:write("# hi\n")
+  pmf:close()
   ct.config.picker = "select"
-  fake["managed"] = { code = 0, stdout = "dot_pick_me.tmpl\n" }
   local real_select = vim.ui.select
   ---@diagnostic disable-next-line: duplicate-set-field
   vim.ui.select = function(items, _, cb)
-    cb(items[1])
+    for _, it in ipairs(items) do
+      if it.display == ".pick_me" then
+        return cb(it)
+      end
+    end
+    cb(nil)
   end
   vim.cmd("Chezmoi pick")
-  eq("select backend edits the picked source file", bufname(), SRC .. "/dot_pick_me.tmpl")
+  eq("select backend edits the picked source file", bufname(), pick_me)
   vim.ui.select = real_select
 
   clear_notes()
@@ -722,38 +796,115 @@ do
   vim.fn.delete(SRC .. "/.chezmoitemplates", "d")
 end
 
--- picker: each plugin backend receives the source dir
+-- picker: each plugin backend receives plugin-built entries (display + abs path)
 do
+  local pick_me = SRC .. "/dot_pick_me.tmpl" -- created in the select test above
   local picked = {}
   package.preload["snacks"] = function()
     return {
       picker = {
-        files = function(o)
-          picked.snacks = o.cwd
+        pick = function(o)
+          picked.snacks = o
         end,
       },
     }
   end
-  package.preload["telescope.builtin"] = function()
+  package.preload["telescope.pickers"] = function()
     return {
-      find_files = function(o)
-        picked.telescope = o.cwd
+      new = function(_, opts)
+        return {
+          find = function()
+            picked.telescope = opts
+          end,
+        }
       end,
     }
+  end
+  package.preload["telescope.finders"] = function()
+    return {
+      new_table = function(o)
+        return o
+      end,
+    }
+  end
+  package.preload["telescope.previewers"] = function()
+    return {
+      new_buffer_previewer = function(o)
+        return o
+      end,
+    }
+  end
+  package.preload["telescope.config"] = function()
+    return { values = {
+      generic_sorter = function() end,
+      buffer_previewer_maker = function() end,
+    } }
   end
   package.preload["fzf-lua"] = function()
     return {
-      files = function(o)
-        picked["fzf-lua"] = o.cwd
+      fzf_exec = function(lines, o)
+        picked.fzf = { lines = lines, opts = o }
       end,
     }
   end
-  for _, name in ipairs({ "snacks", "telescope", "fzf-lua" }) do
-    ct.config.picker = name
-    vim.cmd("Chezmoi pick")
-    eq("picker backend " .. name .. " gets source dir", picked[name], SRC .. "/")
+  package.preload["fzf-lua.previewer.builtin"] = function()
+    return {
+      buffer_or_file = {
+        extend = function()
+          return { super = {} }
+        end,
+      },
+    }
   end
+  package.preload["mini.pick"] = function()
+    return {
+      start = function(o)
+        picked.mini = o
+      end,
+      default_preview = function() end,
+    }
+  end
+
+  local function by_display(items, key)
+    for _, it in ipairs(items) do
+      if it[key] == ".pick_me" then
+        return it
+      end
+    end
+  end
+
+  ct.config.picker = "snacks"
+  vim.cmd("Chezmoi pick")
+  local sitem = by_display(picked.snacks.items, "text")
+  eq("snacks gets display text + abs file", { sitem.text, sitem.file }, { ".pick_me", pick_me })
+
+  ct.config.picker = "telescope"
+  vim.cmd("Chezmoi pick")
+  local tentry
+  for _, e in ipairs(picked.telescope.finder.results) do
+    if e.display == ".pick_me" then
+      tentry = picked.telescope.finder.entry_maker(e)
+    end
+  end
+  eq("telescope entry maps display to source path", { tentry.display, tentry.path }, { ".pick_me", pick_me })
+
+  ct.config.picker = "fzf-lua"
+  vim.cmd("Chezmoi pick")
+  eq("fzf-lua gets display lines", vim.tbl_contains(picked.fzf.lines, ".pick_me"), true)
+  picked.fzf.opts.actions["default"]({ ".pick_me" })
+  eq("fzf-lua default action opens the source", bufname(), pick_me)
+
+  ct.config.picker = "mini"
+  vim.cmd("Chezmoi pick")
+  local mitem = by_display(picked.mini.source.items, "text")
+  eq("mini gets display text + abs path", { mitem.text, mitem.path }, { ".pick_me", pick_me })
+
   ct.config.picker = nil
+  local pb2 = vim.fn.bufnr(pick_me)
+  if pb2 ~= -1 then
+    vim.api.nvim_buf_delete(pb2, { force = true })
+  end
+  os.remove(pick_me)
 end
 
 -- inject directive: only runs where the gotmpl parser exists (skipped in CI)

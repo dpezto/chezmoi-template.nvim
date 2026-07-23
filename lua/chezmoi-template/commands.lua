@@ -5,11 +5,7 @@ local resolve = require("chezmoi-template.resolve")
 
 local uv = vim.uv or vim.loop
 
--- Titled so nvim-notify/noice render a "chezmoi" toast; plain vim.notify
--- ignores the opts and the messages still read fine bare.
-local function notify(msg, level)
-  vim.notify(msg, level or vim.log.levels.INFO, { title = "chezmoi" })
-end
+local notify = require("chezmoi-template").notify
 
 local function buf_target(buf)
   local file = vim.api.nvim_buf_get_name(buf or 0)
@@ -21,14 +17,14 @@ end
 
 -- chezmoi apply, whole state or a single target (async)
 local function apply(target)
-  local cmd = { "chezmoi", "apply" }
+  local args = { "apply" }
   if require("chezmoi-template").config.apply.force then
-    table.insert(cmd, "--force")
+    table.insert(args, "--force")
   end
   if target then
-    table.insert(cmd, target)
+    table.insert(args, target)
   end
-  vim.system(cmd, { text = true }, function(ret)
+  resolve.chezmoi(args, { text = true }, function(ret)
     vim.schedule(function()
       if ret.code == 0 then
         if require("chezmoi-template").config.apply.notify then
@@ -212,8 +208,9 @@ local function preview_toggle()
     return notify("not a chezmoi template buffer", vim.log.levels.WARN)
   end
 
+  local cfg = require("chezmoi-template").config.preview
   local target_ft = vim.b[src].chezmoi_target_ft
-  vim.cmd("vertical botright new")
+  vim.cmd((cfg.split == "horizontal" and "" or "vertical ") .. "botright new")
   local dest = vim.api.nvim_get_current_buf()
   vim.bo[dest].buftype = "nofile"
   vim.bo[dest].bufhidden = "wipe"
@@ -231,7 +228,6 @@ local function preview_toggle()
   map_close(dest)
   vim.cmd.wincmd("p")
 
-  local cfg = require("chezmoi-template").config.preview
   local st = {
     dest = dest,
     timer = cfg.live and uv.new_timer() or nil,
@@ -300,11 +296,11 @@ local subcommands = {
     desc = "diff for current target (whole state on non-chezmoi buffers)",
     run = function()
       local target = buf_target(0)
-      local cmd = { "chezmoi", "diff" }
+      local args = { "diff" }
       if target then
-        table.insert(cmd, target)
+        table.insert(args, target)
       end
-      local ret = vim.system(cmd, { text = true }):wait()
+      local ret = resolve.chezmoi(args, { text = true }):wait()
       if ret.code ~= 0 and (ret.stderr or "") ~= "" then
         return notify("diff failed:\n" .. ret.stderr, vim.log.levels.ERROR)
       end

@@ -1,4 +1,6 @@
-# :Chezmoi pick — fuzzy-find over the source directory, target-aware icons.
+# :Chezmoi pick — fuzzy-find over the source directory: entries labelled with
+# their deployed target names (dot_zshrc.tmpl -> .zshrc), chezmoi internals
+# hidden, preview with the target language injected.
 # Run `source assets/demo/setup.sh` first (isolated demo source).
 #   vhs assets/tapes/picker.tape
 

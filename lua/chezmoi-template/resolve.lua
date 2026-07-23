@@ -7,6 +7,16 @@ function M.has_chezmoi()
   return vim.fn.executable("chezmoi") == 1
 end
 
+-- The one place chezmoi is spawned (feature modules must not call vim.system
+-- for chezmoi directly). opts goes to vim.system verbatim — pass {} for raw
+-- bytes (encryption round-trips), { text = true } for text output. Async when
+-- cb is given; sync callers chain :wait().
+function M.chezmoi(args, opts, cb)
+  local cmd = { "chezmoi" }
+  vim.list_extend(cmd, args)
+  return vim.system(cmd, opts, cb)
+end
+
 -- Strip chezmoi source-state attribute prefixes/suffixes from a path, returning
 -- the deployed target path (e.g. private_dot_zshrc.tmpl -> .zshrc). Pure string
 -- transform: works without the chezmoi binary and on paths outside the source dir.
@@ -39,6 +49,14 @@ function M.resolve_path(name)
         literal = true
         break
       end
+      -- scripts: run_[once_|onchange_][before_|after_]name. before_/after_ are
+      -- attributes only in this position — a regular file named before_x.txt
+      -- keeps its name.
+      local script = part:match("^run_once_(.+)") or part:match("^run_onchange_(.+)") or part:match("^run_(.+)")
+      if script then
+        part = script:gsub("^before_", ""):gsub("^after_", "")
+        changed = true
+      end
       local new_part = part
         :gsub("^private_", "")
         :gsub("^readonly_", "")
@@ -47,11 +65,9 @@ function M.resolve_path(name)
         :gsub("^modify_", "")
         :gsub("^remove_", "")
         :gsub("^symlink_", "")
-        :gsub("^run_once_", "")
-        :gsub("^run_onchange_", "")
-        :gsub("^run_", "")
         :gsub("^encrypted_", "")
         :gsub("^exact_", "")
+        :gsub("^external_", "")
         :gsub("^empty_", "")
       if new_part ~= part then
         part = new_part
@@ -59,7 +75,14 @@ function M.resolve_path(name)
       end
     end
     if not literal then
-      part = part:gsub("^dot_", "."):gsub("%.age$", ""):gsub("%.asc$", ""):gsub("%.tmpl$", "")
+      part = part:gsub("^dot_", ".")
+      -- a .literal suffix stops suffix parsing: foo.tmpl.literal -> foo.tmpl
+      local lit = part:gsub("%.literal$", "")
+      if lit ~= part then
+        part = lit
+      else
+        part = part:gsub("%.age$", ""):gsub("%.asc$", ""):gsub("%.tmpl$", "")
+      end
     end
     table.insert(parts, part)
   end
@@ -80,7 +103,7 @@ function M.source_dir()
       source_cache = false
       return nil
     end
-    local ret = vim.system({ "chezmoi", "source-path" }, { text = true }):wait()
+    local ret = M.chezmoi({ "source-path" }, { text = true }):wait()
     if ret.code ~= 0 then
       source_cache = false
       return nil
@@ -120,7 +143,7 @@ function M.target_path(file)
   if not M.has_chezmoi() then
     return nil
   end
-  local ret = vim.system({ "chezmoi", "target-path", file }, { text = true }):wait()
+  local ret = M.chezmoi({ "target-path", file }, { text = true }):wait()
   local target = ret.code == 0 and vim.trim(ret.stdout) or false
   target_cache[file] = target
   return target or nil
@@ -158,7 +181,7 @@ local function managed_listing(style)
   if not M.has_chezmoi() then
     return nil
   end
-  local ret = vim.system({ "chezmoi", "managed", "--path-style", style, "--include", "files" }, { text = true }):wait()
+  local ret = M.chezmoi({ "managed", "--path-style", style, "--include", "files" }, { text = true }):wait()
   if ret.code ~= 0 then
     return nil
   end
@@ -198,7 +221,7 @@ local function managed_array(style)
   if not M.has_chezmoi() then
     return nil
   end
-  local ret = vim.system({ "chezmoi", "managed", "--path-style", style, "--include", "files" }, { text = true }):wait()
+  local ret = M.chezmoi({ "managed", "--path-style", style, "--include", "files" }, { text = true }):wait()
   if ret.code ~= 0 then
     return nil
   end
@@ -221,9 +244,9 @@ function M.list()
   end
   -- ponytail: all targets in one argv; fine for normal repos, could hit ARG_MAX
   -- with thousands of long paths — batch if that ever bites.
-  local cmd = { "chezmoi", "source-path" }
+  local cmd = { "source-path" }
   vim.list_extend(cmd, targets)
-  local ret = vim.system(cmd, { text = true }):wait()
+  local ret = M.chezmoi(cmd, { text = true }):wait()
   if ret.code ~= 0 then
     return {}
   end
@@ -243,7 +266,7 @@ function M.source_path(target)
   if not M.has_chezmoi() then
     return nil
   end
-  local ret = vim.system({ "chezmoi", "source-path", target }, { text = true }):wait()
+  local ret = M.chezmoi({ "source-path", target }, { text = true }):wait()
   if ret.code ~= 0 then
     return nil
   end
@@ -251,13 +274,18 @@ function M.source_path(target)
   return vim.fs.normalize(vim.trim(ret.stdout))
 end
 
+-- Hard ceiling on a single render — a template stuck on an unauthenticated
+-- secret-manager call must not hang the editor's callbacks forever.
+-- (config.preview.slow_ms handles merely-slow renders well before this.)
+local RENDER_TIMEOUT_MS = 10000
+
 -- Render template text through `chezmoi execute-template` (async).
 -- cb receives the vim.system result ({code, stdout, stderr}).
 function M.execute_template(text, cb)
   if not M.has_chezmoi() then
     return cb({ code = 1, stdout = "", stderr = "chezmoi executable not found" })
   end
-  vim.system({ "chezmoi", "execute-template" }, { stdin = text, text = true, timeout = 10000 }, cb)
+  M.chezmoi({ "execute-template" }, { stdin = text, text = true, timeout = RENDER_TIMEOUT_MS }, cb)
 end
 
 -- Template data (`chezmoi data`), cached per session.
@@ -269,7 +297,7 @@ function M.data()
   end
   data_cache = false
   if M.has_chezmoi() then
-    local ret = vim.system({ "chezmoi", "data", "--format", "json" }, { text = true }):wait()
+    local ret = M.chezmoi({ "data", "--format", "json" }, { text = true }):wait()
     if ret.code == 0 then
       local ok, decoded = pcall(vim.json.decode, ret.stdout)
       if ok and type(decoded) == "table" then
