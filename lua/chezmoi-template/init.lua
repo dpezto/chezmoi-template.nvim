@@ -1,5 +1,62 @@
 local M = {}
 
+-- LuaCATS classes for lua-language-server completion in plugin specs:
+--   ---@module 'chezmoi-template'
+--   ---@type chezmoi-template.Config
+--   opts = { ... }
+
+---@class chezmoi-template.Config.inject
+---@field enabled? boolean treesitter injection of the target language into *.tmpl buffers
+---@field exclude? string[] lua patterns (matched on the normalized "/" path) to leave as plain gotmpl
+
+---@class chezmoi-template.Config.format
+---@field enabled? boolean conform formatter that formats templates as their target filetype
+---@field indent_directives? boolean depth-pad column-0 `{{-` directive blocks
+
+---@class chezmoi-template.Config.icons
+---@field enabled? boolean resolve chezmoi source names to target icons in mini.icons
+
+---@class chezmoi-template.Config.apply
+---@field on_save? boolean run `chezmoi apply <target>` after writing a managed source file
+---@field notify? boolean notify on successful applies (failures always notify)
+---@field force? boolean pass --force (skip chezmoi's prompt on externally-modified targets)
+
+---@class chezmoi-template.Config.preview
+---@field live? boolean re-render :Chezmoi preview as you type (false = re-render on write only)
+---@field debounce? integer ms of idle before a live re-render
+---@field slow_ms? integer a render slower than this pauses live preview to on-write; 0 disables
+---@field split? "vertical"|"horizontal" preview window orientation
+
+---@class chezmoi-template.Config.diagnostics
+---@field enabled? boolean surface template errors as diagnostics on write
+
+---@class chezmoi-template.Config.completion
+---@field mask? string[] hide values of data keys matching these lua patterns in completion docs
+
+---@class chezmoi-template.Config.picker
+---@field backend? "snacks"|"telescope"|"fzf-lua"|"mini"|"select" nil = auto-detect among loaded pickers
+---@field display? "target"|"source" entry labels: deployed names (.zshrc) or raw source names (dot_zshrc.tmpl)
+---@field exclude? string[] lua patterns (vs the source-relative path) to hide; nil = built-in internals list, {} = show all
+
+---@class chezmoi-template.Config.encryption
+---@field enabled? boolean transparent decrypt/encrypt of chezmoi-managed encrypted files (*.age, *.asc)
+---@field exclude? string[] lua patterns for encrypted paths to leave untouched
+
+---@class chezmoi-template.Config
+---@field source_dir? string chezmoi source directory; nil = auto-detect via `chezmoi source-path`
+---@field inject? chezmoi-template.Config.inject
+---@field format? chezmoi-template.Config.format
+---@field icons? chezmoi-template.Config.icons
+---@field apply? chezmoi-template.Config.apply
+---@field preview? chezmoi-template.Config.preview
+---@field notify_on_open? boolean notify when opening a chezmoi-managed source file
+---@field redirect? boolean opening a deployed managed file jumps to its chezmoi source
+---@field diagnostics? chezmoi-template.Config.diagnostics
+---@field completion? chezmoi-template.Config.completion
+---@field picker? chezmoi-template.Config.picker|string a backend-name string is shorthand for { backend = ... }
+---@field encryption? chezmoi-template.Config.encryption
+
+---@type chezmoi-template.Config
 M.config = {
   -- nil = auto-detect via `chezmoi source-path`
   source_dir = nil,
@@ -25,7 +82,8 @@ M.config = {
   -- ms); false = re-render on write only. Invalid syntax keeps the last valid
   -- render until it parses again. slow_ms: if a render takes longer than this,
   -- live pauses to on-write (guards heavy secret-manager templates); 0 disables.
-  preview = { live = true, debounce = 150, slow_ms = 500 },
+  -- split: "vertical" | "horizontal" preview window orientation
+  preview = { live = true, debounce = 150, slow_ms = 500, split = "vertical" },
   -- notify when opening a chezmoi-managed source file (à la chezmoi.nvim)
   notify_on_open = false,
   -- opening a deployed managed file jumps to its chezmoi source (opt-in)
@@ -37,9 +95,19 @@ M.config = {
     -- hide values of data keys matching these lua patterns in completion docs
     mask = { "secret", "token", "passw", "key", "api" },
   },
-  -- :Chezmoi pick backend: "snacks" | "telescope" | "fzf-lua" | "mini" | "select";
-  -- nil = auto-detect among loaded pickers, falling back to vim.ui.select
-  picker = nil,
+  -- :Chezmoi pick source-file picker (a plain string is shorthand for { backend = ... })
+  picker = {
+    -- "snacks" | "telescope" | "fzf-lua" | "mini" | "select";
+    -- nil = auto-detect among loaded pickers, falling back to vim.ui.select
+    backend = nil,
+    -- entry labels: "target" = deployed names (dot_zshrc.tmpl -> .zshrc),
+    -- "source" = raw source-relative names
+    display = "target",
+    -- lua patterns (vs the source-relative path) to hide; nil = built-in
+    -- internals list (picker.DEFAULT_EXCLUDE: .git/, .chezmoi.$FORMAT.tmpl,
+    -- .chezmoiversion, .chezmoiroot, .chezmoidata.*), {} = show everything
+    exclude = nil,
+  },
   -- transparent decrypt/encrypt of chezmoi-managed encrypted files (*.age, *.asc)
   -- via `chezmoi decrypt` / `chezmoi encrypt` (age/rage/builtin/gpg, identities,
   -- recipients all come from chezmoi's own encryption config)
@@ -58,6 +126,7 @@ local SUBCOMMANDS = { "apply", "diff", "edit", "pick", "preview", "source", "tar
 -- autocmds) is deferred to M._activate(), fired by the first template open or
 -- :Chezmoi command — so startup stays cheap whether the plugin is loaded via
 -- the plugin/ bootstrap or an eager setup(opts) from a lazy.nvim spec.
+---@param opts? chezmoi-template.Config
 function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", M.config, opts or {})
   M._did_setup = true
@@ -179,6 +248,12 @@ function M._activate()
   })
 end
 
+-- Titled so nvim-notify/noice render a "chezmoi" toast; plain vim.notify
+-- ignores the opts and the messages still read fine bare.
+function M.notify(msg, level)
+  vim.notify(msg, level or vim.log.levels.INFO, { title = "chezmoi" })
+end
+
 -- Public API for integrations (statuslines, custom pickers, scripts).
 
 -- All managed files as { source = <abs>, target = <abs> } pairs.
@@ -192,7 +267,7 @@ function M.edit(target)
   M._activate()
   local src = require("chezmoi-template.resolve").source_path(vim.fn.expand(target))
   if not src then
-    vim.notify(target .. " is not chezmoi-managed", vim.log.levels.WARN, { title = "chezmoi" })
+    M.notify(target .. " is not chezmoi-managed", vim.log.levels.WARN)
     return
   end
   vim.cmd.edit(vim.fn.fnameescape(src))
