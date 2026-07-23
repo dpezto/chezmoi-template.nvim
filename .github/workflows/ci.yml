@@ -1,5 +1,4 @@
 name: ci
-
 on:
   push:
     branches: [main]
@@ -7,17 +6,14 @@ on:
   schedule:
     # weekly run so nvim-nightly API drift surfaces without waiting for a push
     - cron: "0 6 * * 1"
-
 permissions:
   contents: read
-
 jobs:
   actionlint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: reviewdog/action-actionlint@50842263c20a7c46bd0065b9e624d3c569db061e # v1
-
   stylua:
     runs-on: ubuntu-latest
     steps:
@@ -27,7 +23,6 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           version: latest
           args: --check lua plugin tests
-
   test:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -59,12 +54,11 @@ jobs:
           "$HOME/.luarocks/bin/luacov" -r lcov
           sed -i "s|^SF:$GITHUB_WORKSPACE/|SF:|" luacov.report.out
       - if: matrix.os == 'ubuntu-latest' && matrix.neovim == 'stable'
-        uses: coverallsapp/github-action@5cbfd81b66ca5d10c19b062c04de0199c215fb6e # v2
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          file: luacov.report.out
-          format: lcov
-
+          files: luacov.report.out
+          disable_search: true
+          fail_ci_if_error: false
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: test

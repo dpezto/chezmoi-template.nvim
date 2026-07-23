@@ -1,7 +1,8 @@
 # chezmoi-template.nvim
 
 [![CI](https://github.com/dpezto/chezmoi-template.nvim/actions/workflows/ci.yml/badge.svg)](https://github.com/dpezto/chezmoi-template.nvim/actions/workflows/ci.yml)
-[![Coverage Status](https://coveralls.io/repos/github/dpezto/chezmoi-template.nvim/badge.svg?branch=main)](https://coveralls.io/github/dpezto/chezmoi-template.nvim?branch=main)
+[![codecov](https://codecov.io/gh/dpezto/chezmoi-template.nvim/branch/main/graph/badge.svg)](https://codecov.io/gh/dpezto/chezmoi-template.nvim)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Edit your [chezmoi](https://chezmoi.io) source files **natively** — and make Neovim understand them.
 
