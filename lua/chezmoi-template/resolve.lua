@@ -132,6 +132,31 @@ end
 
 local target_cache = {}
 
+-- True for a source-dir entry chezmoi does not deploy: anything whose path
+-- relative to the source dir has a dot-prefixed component. That is chezmoi's
+-- own rule — `.chezmoi.<fmt>.tmpl`, `.chezmoiignore`, `.chezmoidata/`,
+-- `.chezmoiscripts/`, `.chezmoitemplates/` are source state, and every other
+-- dot entry (`.git/`, `.github/`) is skipped outright. Needed because
+-- `chezmoi target-path` answers for them anyway: it echoes a plausible
+-- $HOME/<name> and exits 0, so callers hand that to `chezmoi apply` and get
+-- "not managed".
+local function is_source_state(file)
+  local dir = M.source_dir()
+  if not dir then
+    return false
+  end
+  local abs = vim.fs.normalize(vim.fn.fnamemodify(file, ":p"))
+  if abs:sub(1, #dir) ~= dir then
+    return false
+  end
+  for component in vim.gsplit(abs:sub(#dir + 1), "/", { plain = true }) do
+    if component:sub(1, 1) == "." then
+      return true
+    end
+  end
+  return false
+end
+
 -- Deployed target path for a source file via `chezmoi target-path`.
 -- Returns nil for files with no deploy target (.chezmoitemplates/ partials,
 -- special files) or when chezmoi is unavailable.
@@ -139,6 +164,10 @@ function M.target_path(file)
   local cached = target_cache[file]
   if cached ~= nil then
     return cached or nil
+  end
+  if is_source_state(file) then
+    target_cache[file] = false
+    return nil
   end
   if not M.has_chezmoi() then
     return nil

@@ -425,6 +425,23 @@ local tp_spawns = spawns["target-path"]
 resolve.target_path(SRC .. "/dot_zshrc.tmpl")
 eq("target_path cached (no respawn)", spawns["target-path"], tp_spawns)
 
+-- resolve: chezmoi's own source state has no target. `chezmoi target-path`
+-- answers for these anyway (exit 0, $HOME/<name>), and feeding that to
+-- `chezmoi apply` fails with "not managed" — so never ask.
+for _, special in ipairs({
+  "/.chezmoi.toml.tmpl",
+  "/.chezmoiignore.tmpl",
+  "/.chezmoiexternal.toml",
+  "/.chezmoidata/machines.yaml",
+  "/.chezmoiscripts/run_once_after_installer.sh.tmpl",
+  "/.chezmoitemplates/log.sh",
+  "/.git/COMMIT_EDITMSG",
+}) do
+  eq("target_path nil for " .. special, resolve.target_path(SRC .. special), nil)
+end
+eq("target_path never spawned for source state", spawns["target-path"], tp_spawns)
+eq("target_path outside source dir still resolves", resolve.target_path(SRC .. "/dot_zshrc.tmpl"), SRC .. "/.zshrc")
+
 -- resolve: data caching + invalidation + broken json
 fake["data"] = { code = 0, stdout = '{"chezmoi":{"os":"darwin"},"email":"e@x"}' }
 resolve.invalidate()
