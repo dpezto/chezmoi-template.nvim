@@ -240,6 +240,40 @@ do
   end
 end
 
+-- 10. an action whose closing }} sits inside a quoted string: the scan must skip
+-- the inner }} rather than cutting the span short. chezmoi's own merge config
+-- emits exactly this shape, quoting a template that renders another template.
+run_case("nested quoted braces", "toml", {
+  "[merge]",
+  'args = ["-d", "{{ "{{ .Destination }}" }}", "{{ "{{ .Source }}" }}"]',
+}, {
+  "[merge]",
+  'args = ["-d", "{{ "{{ .Destination }}" }}", "{{ "{{ .Source }}" }}"]',
+})
+
+-- 11. a half-typed action (no closing }}) on a line that has another complete
+-- one: masking must consume to end of line instead of erroring. This is the
+-- state of every line mid-keystroke, so it has to degrade quietly.
+run_case("unterminated trailing action", "toml", {
+  "[d]",
+  "k = {{ .a }} {{ .b",
+}, {
+  "[d]",
+  "k = {{ .a }} {{ .b",
+})
+
+-- 12. a template with no resolvable target language is passed through untouched
+-- rather than formatted as itself
+run_case("gotmpl target passes through", "gotmpl", {
+  "{{- if .x }}",
+  "whatever   spacing",
+  "{{- end }}",
+}, {
+  "{{- if .x }}",
+  "whatever   spacing",
+  "{{- end }}",
+})
+
 -- Pure-function cases -------------------------------------------------------
 
 local function eq(name, got, want)
@@ -249,6 +283,40 @@ local function eq(name, got, want)
   else
     print("ok   " .. name)
   end
+end
+
+-- json targets are formatted as jsonc so the // comment placeholders parse; the
+-- scratch buffer is renamed accordingly even when the target is plain .json
+do
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(buf, vim.fs.normalize(vim.fn.tempname()) .. "/settings.json.tmpl")
+  vim.b[buf].chezmoi_target_ft = "json"
+  _G.captured_name = nil
+  local done
+  format.formatter.format(nil, { buf = buf }, { "{", "{{- if .x }}", '  "a": 1', "{{- end }}", "}" }, function()
+    done = true
+  end)
+  vim.wait(5000, function()
+    return done
+  end)
+  eq("json scratch renamed to .jsonc", (_G.captured_name or ""):match("%.jsonc$") ~= nil, true)
+end
+
+-- a json target whose deployed name carries no .json suffix at all (.prettierrc,
+-- .eslintrc) still has to reach the jsonc formatter, so the extension is appended
+do
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(buf, vim.fs.normalize(vim.fn.tempname()) .. "/dot_prettierrc.tmpl")
+  vim.b[buf].chezmoi_target_ft = "json"
+  _G.captured_name = nil
+  local done
+  format.formatter.format(nil, { buf = buf }, { "{", "{{- if .x }}", '  "a": 1', "{{- end }}", "}" }, function()
+    done = true
+  end)
+  vim.wait(5000, function()
+    return done
+  end)
+  eq("suffixless json target gains .jsonc", (_G.captured_name or ""):match("prettierrc%.jsonc$") ~= nil, true)
 end
 
 local diagnostics = require("chezmoi-template.diagnostics")

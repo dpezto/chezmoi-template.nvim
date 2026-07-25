@@ -20,6 +20,7 @@ package.preload["conform"] = function()
   function M.format(opts, cb)
     local masked = vim.api.nvim_buf_get_lines(opts.bufnr, 0, -1, false)
     _G.captured_masked = masked
+    _G.captured_name = vim.api.nvim_buf_get_name(opts.bufnr)
     if _G.conform_reject and _G.conform_reject(masked) then
       return cb("stub: masked buffer rejected")
     end
