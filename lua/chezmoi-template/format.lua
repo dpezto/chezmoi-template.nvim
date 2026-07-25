@@ -3,8 +3,13 @@
 -- the spans.
 -- Per line: a line that is ONLY template directives -> a comment placeholder
 -- (structurally inert; also covers multi-line {{ … }} spans); inline {{…}} ->
--- a unique token, quoted after = / : so JSON/TOML stay valid, bare otherwise
--- so it nests inside strings and identifiers.
+-- a unique token, quoted where it stands alone as a value so JSON/TOML stay
+-- valid, bare where it is glued to identifier characters or sits inside a
+-- string, so it nests into keys and words.
+-- Not every line has a valid token form (`k = {{ .x }}suffix`,
+-- `{{ if .on }}k = 1{{ end }}`), so a rejected mask is retried with every
+-- template line replaced by a comment placeholder: those lines come back
+-- untouched instead of failing the whole file.
 local M = {}
 
 M.formatter = {
@@ -48,100 +53,116 @@ M.formatter = {
       end
     end
 
-    local masked, map, open = {}, {}, false
-    for i, line in ipairs(lines) do
-      local key = prefix .. " " .. sentinel .. i .. (suffix ~= "" and " " .. suffix or "")
-      local indent = line:match("^(%s*)")
-      if open then -- continuation of a multi-line {{ … }} span
-        masked[i] = key
-        map[key] = line
-        open = not line:match("}}")
-      elseif line:match("{{") and not line:match("}}") then -- opens a multi-line span
-        open = true
-        masked[i] = indent .. key
-        map[key] = line:sub(#indent + 1)
-      elseif line:match("{{") and line:gsub("{{.-}}", ""):match(is_json and "^[%s,]*$" or "^%s*$") then -- whole-line directive(s)
-        masked[i] = indent .. key
-        map[key] = line:sub(#indent + 1)
-      elseif line:match("{{") then -- inline template(s) embedded in code
-        local res, pos, j = "", 1, 0
-        while pos <= #line do
-          local s, e = line:find("{{", pos, true)
-          if not s then
-            res = res .. line:sub(pos)
-            break
-          end
-          res = res .. line:sub(pos, s - 1)
-          local t_end = e + 1
-          while true do
-            local e2 = line:find("}}", t_end, true)
-            if not e2 then
-              t_end = #line
+    -- Two masking strengths. Fine (the default) turns each inline {{…}} into a
+    -- token, so the formatter still lays the surrounding line out. Coarse
+    -- replaces every template-bearing line with a comment placeholder: those
+    -- lines come back untouched, but the placeholder is inert in any syntax, so
+    -- the rest of the file still formats. Coarse is the retry for lines the
+    -- fine pass cannot express — a template glued to a bare word
+    -- (`k = {{ .x }}suffix`) or a control-flow pair wrapping content
+    -- (`{{ if .on }}k = 1{{ end }}`); neither has a valid token form.
+    local function build_mask(coarse)
+      local masked, map, open = {}, {}, false
+      for i, line in ipairs(lines) do
+        local key = prefix .. " " .. sentinel .. i .. (suffix ~= "" and " " .. suffix or "")
+        local indent = line:match("^(%s*)")
+        if open then -- continuation of a multi-line {{ … }} span
+          masked[i] = key
+          map[key] = line
+          open = not line:match("}}")
+        elseif line:match("{{") and not line:match("}}") then -- opens a multi-line span
+          open = true
+          masked[i] = indent .. key
+          map[key] = line:sub(#indent + 1)
+        elseif line:match("{{") and (coarse or line:gsub("{{.-}}", ""):match(is_json and "^[%s,]*$" or "^%s*$")) then -- whole-line directive(s), or any template line under coarse masking
+          masked[i] = indent .. key
+          map[key] = line:sub(#indent + 1)
+        elseif line:match("{{") then -- inline template(s) embedded in code
+          local res, pos, j = "", 1, 0
+          while pos <= #line do
+            local s, e = line:find("{{", pos, true)
+            if not s then
+              res = res .. line:sub(pos)
               break
             end
-            local _, q = line:sub(e + 1, e2 - 1):gsub('\\"', ""):gsub('"', "")
-            if q % 2 == 0 then
-              t_end = e2 + 1
-              break
+            res = res .. line:sub(pos, s - 1)
+            local t_end = e + 1
+            while true do
+              local e2 = line:find("}}", t_end, true)
+              if not e2 then
+                t_end = #line
+                break
+              end
+              local _, q = line:sub(e + 1, e2 - 1):gsub('\\"', ""):gsub('"', "")
+              if q % 2 == 0 then
+                t_end = e2 + 1
+                break
+              end
+              t_end = e2 + 2
             end
-            t_end = e2 + 2
+            j = j + 1
+            local tmpl = line:sub(s, t_end)
+            -- Quote only a standalone token (value position). A token glued to
+            -- identifier chars is part of a bare key or word (`is_{{ $r }}`) —
+            -- quoting it there splits the identifier and breaks TOML/JSON.
+            local _, q = res:gsub('\\"', ""):gsub('"', "")
+            local adjacent = res:sub(-1):match("[%w_%-%.]") or line:sub(t_end + 1, t_end + 1):match("[%w_%-%.]")
+            local k = sentinel .. i .. "_" .. j
+            k = (q % 2 == 0 and not res:match('"$') and not adjacent) and '"' .. k .. '"' or k
+            map[k] = tmpl
+            res = res .. k
+            pos = t_end + 1
           end
-          j = j + 1
-          local tmpl = line:sub(s, t_end)
-          -- Quote only a standalone token (value position). A token glued to
-          -- identifier chars is part of a bare key or word (`is_{{ $r }}`) —
-          -- quoting it there splits the identifier and breaks TOML/JSON.
-          local _, q = res:gsub('\\"', ""):gsub('"', "")
-          local adjacent = res:sub(-1):match("[%w_%-%.]") or line:sub(t_end + 1, t_end + 1):match("[%w_%-%.]")
-          local k = sentinel .. i .. "_" .. j
-          k = (q % 2 == 0 and not res:match('"$') and not adjacent) and '"' .. k .. '"' or k
-          map[k] = tmpl
-          res = res .. k
-          pos = t_end + 1
+          masked[i] = res
+        else
+          masked[i] = line
         end
-        masked[i] = res
-      else
-        masked[i] = line
       end
+      return masked, map
     end
 
     -- Format in a throwaway buffer named in a temp dir (NOT the chezmoi source
     -- dir) so *.tmpl autocmds never fire on it; set the name and filetype with
     -- noautocmd so no LSP attaches to a buffer we delete mid-async.
-    local scratch = vim.api.nvim_create_buf(false, true)
-    vim.bo[scratch].buftype = ""
-    vim.api.nvim_buf_set_lines(scratch, 0, -1, false, masked)
-    local real_name = vim.api.nvim_buf_get_name(ctx.buf)
-    local name
-    if real_name ~= "" then
-      name = real_name:gsub("%.tmpl$", ""):gsub("%.age$", ""):gsub("%.asc$", "")
-      -- Ensure JSON targets are formatted as JSONC so the formatter accepts
-      -- // comment placeholders
-      if is_json then
-        name = name:gsub("%.jsonc?$", ".jsonc")
-        if not name:match("%.jsonc$") then
-          name = name .. ".jsonc"
+    local function run(masked, cb)
+      local scratch = vim.api.nvim_create_buf(false, true)
+      vim.bo[scratch].buftype = ""
+      vim.api.nvim_buf_set_lines(scratch, 0, -1, false, masked)
+      local real_name = vim.api.nvim_buf_get_name(ctx.buf)
+      local name
+      if real_name ~= "" then
+        name = real_name:gsub("%.tmpl$", ""):gsub("%.age$", ""):gsub("%.asc$", "")
+        -- Ensure JSON targets are formatted as JSONC so the formatter accepts
+        -- // comment placeholders
+        if is_json then
+          name = name:gsub("%.jsonc?$", ".jsonc")
+          if not name:match("%.jsonc$") then
+            name = name .. ".jsonc"
+          end
         end
       end
-    end
-    vim.api.nvim_buf_call(scratch, function()
-      if name then
-        vim.cmd("noautocmd keepalt file " .. vim.fn.fnameescape(name))
-      end
-      local scratch_ft = (target_ft == "json") and "jsonc" or target_ft
-      vim.cmd("noautocmd setlocal filetype=" .. scratch_ft)
-    end)
+      vim.api.nvim_buf_call(scratch, function()
+        if name then
+          vim.cmd("noautocmd keepalt file " .. vim.fn.fnameescape(name))
+        end
+        local scratch_ft = (target_ft == "json") and "jsonc" or target_ft
+        vim.cmd("noautocmd setlocal filetype=" .. scratch_ft)
+      end)
 
-    require("conform").format({ bufnr = scratch, async = true, lsp_format = "fallback" }, function(err, _)
-      if err then
+      require("conform").format({ bufnr = scratch, async = true, lsp_format = "fallback" }, function(err, _)
+        if err then
+          vim.api.nvim_buf_delete(scratch, { force = true })
+          return cb(err)
+        end
+        -- No early return when the underlying formatter changed nothing: the
+        -- opener-indent pairing in restore() must still run.
+        local formatted = vim.api.nvim_buf_get_lines(scratch, 0, -1, false)
         vim.api.nvim_buf_delete(scratch, { force = true })
-        return callback(err)
-      end
-      -- No early return when the underlying formatter changed nothing: the
-      -- opener-indent pairing below must still run.
-      local formatted = vim.api.nvim_buf_get_lines(scratch, 0, -1, false)
-      vim.api.nvim_buf_delete(scratch, { force = true })
+        cb(nil, formatted)
+      end)
+    end
 
+    local function restore(formatted, map)
       local keys = vim.tbl_keys(map)
       table.sort(keys, function(a, b)
         return #a > #b
@@ -201,6 +222,23 @@ M.formatter = {
       end
 
       callback(nil, final)
+    end
+
+    local fine, fine_map = build_mask(false)
+    run(fine, function(err, formatted)
+      if not err then
+        return restore(formatted, fine_map)
+      end
+      -- The fine mask produced something the target formatter rejects. Retry
+      -- with every template line inert, so one unmaskable line cannot block
+      -- formatting the rest of the file.
+      local coarse, coarse_map = build_mask(true)
+      run(coarse, function(coarse_err, coarse_formatted)
+        if coarse_err then
+          return callback(coarse_err)
+        end
+        restore(coarse_formatted, coarse_map)
+      end)
     end)
   end,
 }

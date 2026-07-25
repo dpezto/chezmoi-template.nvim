@@ -189,6 +189,57 @@ run_case("toml inline key fragment", "toml", {
   end
 end)
 
+-- 9. coarse fallback: some lines have no valid token form — a control-flow pair
+-- wrapping content, or a template glued to a bare word. Rather than failing the
+-- whole file, those are re-masked as inert comment placeholders so the rest of
+-- the file still formats and the lines themselves round-trip untouched.
+_G.conform_reject = function(masked)
+  for _, l in ipairs(masked) do
+    if l:match("CHEZMOI_TMPL_%d+_%d+") then -- reject any fine (token) masking
+      return true
+    end
+  end
+end
+run_case("coarse fallback on unmaskable lines", "toml", {
+  "[d]",
+  "{{ if .on }}k = 1{{ end }}",
+  "k = {{ .x }}suffix",
+}, {
+  "[d]",
+  "{{ if .on }}k = 1{{ end }}",
+  "k = {{ .x }}suffix",
+}, function(masked)
+  for i = 2, 3 do
+    if not masked[i]:match("^#%s*CHEZMOI_TMPL_%d+$") then
+      return "line " .. i .. " is not a whole-line comment placeholder: " .. masked[i]
+    end
+  end
+end)
+_G.conform_reject = nil
+
+-- both passes failing still surfaces the error rather than silently mangling
+do
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.b[buf].chezmoi_target_ft = "toml"
+  _G.conform_reject = function()
+    return true
+  end
+  local got_err, done
+  format.formatter.format(nil, { buf = buf }, { "[d]", "k = {{ .x }}" }, function(err)
+    got_err, done = err, true
+  end)
+  vim.wait(5000, function()
+    return done
+  end)
+  _G.conform_reject = nil
+  if not got_err then
+    failures = failures + 1
+    print("FAIL both passes rejected still reports an error")
+  else
+    print("ok   both passes rejected still reports an error")
+  end
+end
+
 -- Pure-function cases -------------------------------------------------------
 
 local function eq(name, got, want)

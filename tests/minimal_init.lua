@@ -10,12 +10,19 @@ end
 
 -- Stub conform: identity "formatter" so tests exercise masking/restore/indent
 -- logic without any external formatter binaries. Captures the masked scratch
--- buffer for assertions.
+-- buffer for assertions. Setting _G.conform_reject to a predicate over the
+-- masked lines makes the stub reject that buffer, which is how the coarse
+-- fallback pass is exercised without a real formatter.
 _G.captured_masked = nil
+_G.conform_reject = nil
 package.preload["conform"] = function()
   local M = { formatters = {}, formatters_by_ft = {} }
   function M.format(opts, cb)
-    _G.captured_masked = vim.api.nvim_buf_get_lines(opts.bufnr, 0, -1, false)
+    local masked = vim.api.nvim_buf_get_lines(opts.bufnr, 0, -1, false)
+    _G.captured_masked = masked
+    if _G.conform_reject and _G.conform_reject(masked) then
+      return cb("stub: masked buffer rejected")
+    end
     cb(nil, false)
   end
   return M
