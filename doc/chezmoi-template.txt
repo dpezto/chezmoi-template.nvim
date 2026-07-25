@@ -50,9 +50,14 @@ change options. With lazy.nvim: >lua
 <
 `lazy = false`, but startup stays cheap: only filetype detection and light
 triggers register up front; the heavy setup() is deferred until the first
-template opens or a :Chezmoi* command runs. Don't set ft/cmd — the internal
+managed file opens or a :Chezmoi* command runs. Don't set ft/cmd — the internal
 bootstrap handles lazy-loading, and its filetype registration must run at
 startup.
+
+Managed files that are not templates (most of a source directory) are
+recognized by source-dir membership, so the first buffer of a session resolves
+the source dir with one `chezmoi source-path`, cached from then on. Setting the
+source_dir option skips that lookup.
 
 Without a plugin spec, options can also be set via >lua
 

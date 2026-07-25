@@ -105,6 +105,10 @@ function M.setup()
       if not resolve.is_managed(ctx.file) then
         return
       end
+      -- An encrypted file is a managed source file like any other: bring up the
+      -- rest of the plugin (commands, apply-on-save, icons) for it too. Safe
+      -- here because _activate() no longer touches this module's augroup.
+      require("chezmoi-template")._activate()
 
       -- Never persist decrypted content: no swap, no undo history on disk
       vim.bo[ctx.buf].binary = true

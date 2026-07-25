@@ -285,6 +285,37 @@ local function eq(name, got, want)
   end
 end
 
+-- bootstrap (still pre-activation here): most of a chezmoi source dir is plain
+-- files, not templates, so activation cannot key off *.tmpl alone — a `*`
+-- BufReadPre carries source-dir membership.
+do
+  local pats = {}
+  for _, a in ipairs(vim.api.nvim_get_autocmds({ event = "BufReadPre", group = "chezmoi-template.bootstrap" })) do
+    pats[a.pattern] = true
+  end
+  eq("bootstrap watches every buffer for managed files", pats["*"], true)
+  eq("bootstrap still watches templates by name", pats["*.tmpl"], true)
+
+  -- and the trigger itself: every buffer is seen, only managed ones activate
+  local cb
+  for _, a in ipairs(vim.api.nvim_get_autocmds({ event = "BufReadPre", group = "chezmoi-template.bootstrap" })) do
+    if a.pattern == "*" then
+      cb = a.callback
+    end
+  end
+  local ct0 = require("chezmoi-template")
+  cb({ file = "/definitely/not/a/chezmoi/source/foo.lua", buf = 0 })
+  eq("managed-file trigger ignores paths outside the source dir", ct0._activated, nil)
+  cb({ file = vim.fs.normalize(vim.fn.getcwd()) .. "/tests/dot_zshrc.tmpl", buf = 0 })
+  eq("managed-file trigger activates on a managed file", ct0._activated, true)
+
+  -- put the bootstrap triggers back: activating deleted their augroup, and the
+  -- rest of the file expects the plugin to still be waiting for a template
+  ct0._activated = nil
+  ct0._registered = false
+  ct0._register()
+end
+
 -- json targets are formatted as jsonc so the // comment placeholders parse; the
 -- scratch buffer is renamed accordingly even when the target is plain .json
 do
@@ -949,6 +980,19 @@ do
   ct.config.picker = nil
 end
 
+-- _activate must not re-register encryption: its BufReadPre callback installs
+-- buffer-local handlers for the file being read, and clearing the augroup
+-- mid-read would drop them
+do
+  local count = function()
+    return #vim.api.nvim_get_autocmds({ group = "chezmoi-template.encryption" })
+  end
+  local before = count()
+  ct._activated = false
+  ct._activate()
+  eq("activate leaves the encryption augroup intact", count(), before)
+end
+
 -- encryption: decrypt on read, re-encrypt on write, exclude patterns
 do
   local age = SRC .. "/enc_roundtrip.age"
@@ -1212,6 +1256,19 @@ do
   require("chezmoi-template.inject").seed_buffer(yb, SRC .. "/dot_included.json.tmpl")
   eq("non-excluded still seeds target ft", vim.b[yb].chezmoi_target_ft, "json")
   ct.config.inject.exclude = {}
+end
+
+-- _register wires encryption up front when it is enabled, rather than leaving it
+-- to _activate: an autocmd created while BufReadPre is already dispatching does
+-- not run for that read, so the first encrypted file of a session would open as
+-- ciphertext. Last in the file — it re-runs registration.
+do
+  pcall(vim.api.nvim_del_augroup_by_name, "chezmoi-template.encryption")
+  ct.config.encryption.enabled = true
+  ct._registered = false
+  ct._register()
+  local ok, autocmds = pcall(vim.api.nvim_get_autocmds, { group = "chezmoi-template.encryption" })
+  eq("_register wires encryption when enabled", ok and #autocmds > 0, true)
 end
 
 -- flush coverage stats before exit (`nvim -l` may skip luacov's exit hook)
