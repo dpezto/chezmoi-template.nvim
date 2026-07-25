@@ -422,6 +422,19 @@ function M.setup()
         if not resolve.is_managed(ctx.file) then
           return
         end
+        -- chezmoi's own source state (.chezmoi.<fmt>.tmpl, .chezmoiignore,
+        -- .chezmoidata/, …) deploys nowhere, so there is nothing to apply.
+        -- Editing it can still invalidate the generated config, which only
+        -- chezmoi can judge — report what it says instead of staying silent.
+        if resolve.is_source_state(ctx.file) then
+          return resolve.warnings(function(warnings)
+            if warnings then
+              vim.schedule(function()
+                notify(table.concat(warnings, "\n"), vim.log.levels.WARN)
+              end)
+            end
+          end)
+        end
         local target = resolve.target_path(ctx.file)
         if target then
           apply(target)

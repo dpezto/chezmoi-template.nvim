@@ -140,7 +140,7 @@ local target_cache = {}
 -- `chezmoi target-path` answers for them anyway: it echoes a plausible
 -- $HOME/<name> and exits 0, so callers hand that to `chezmoi apply` and get
 -- "not managed".
-local function is_source_state(file)
+function M.is_source_state(file)
   local dir = M.source_dir()
   if not dir then
     return false
@@ -165,7 +165,7 @@ function M.target_path(file)
   if cached ~= nil then
     return cached or nil
   end
-  if is_source_state(file) then
+  if M.is_source_state(file) then
     target_cache[file] = false
     return nil
   end
@@ -176,6 +176,28 @@ function M.target_path(file)
   local target = ret.code == 0 and vim.trim(ret.stdout) or false
   target_cache[file] = target
   return target or nil
+end
+
+-- Warnings chezmoi reports about the current state, e.g. "config file template
+-- has changed, run chezmoi init to regenerate config file" after the config
+-- template is edited. chezmoi tracks that itself (it hashes the template into
+-- its persistent state), so the condition is read from `chezmoi status` stderr
+-- rather than recomputed here. Async only: cb receives the warning lines with
+-- the "chezmoi: warning:" prefix stripped, or nil when there are none.
+function M.warnings(cb)
+  if not M.has_chezmoi() then
+    return cb(nil)
+  end
+  M.chezmoi({ "status" }, { text = true }, function(ret)
+    local lines = {}
+    for line in (ret.stderr or ""):gmatch("[^\r\n]+") do
+      local warning = line:match("^chezmoi:%s*warning:%s*(.+)$")
+      if warning then
+        lines[#lines + 1] = warning
+      end
+    end
+    cb(#lines > 0 and lines or nil)
+  end)
 end
 
 -- Filetype for a target path.

@@ -552,6 +552,31 @@ vim.wait(1000, function()
 end)
 eq("clean render clears diagnostics", #vim.diagnostic.get(tb), 0)
 
+-- saving chezmoi's own source state reports chezmoi's warnings, never applies
+local sb = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_name(sb, SRC .. "/.chezmoi.toml.tmpl")
+fake["status"] = {
+  code = 0,
+  stdout = "",
+  stderr = "chezmoi: warning: config file template has changed, run chezmoi init to regenerate config file\n",
+}
+clear_notes()
+local apply_spawns = spawns["apply"]
+vim.api.nvim_exec_autocmds("BufWritePost", { buffer = sb })
+vim.wait(1000, function()
+  return has_note("run chezmoi init")
+end)
+eq("source-state save surfaces chezmoi's warning", has_note("config file template has changed"), true)
+eq("source-state save strips the chezmoi: warning: prefix", has_note("chezmoi: warning:"), false)
+eq("source-state save does not apply", spawns["apply"], apply_spawns)
+
+-- a clean status says nothing
+fake["status"] = { code = 0, stdout = "MM .zshrc\n", stderr = "" }
+clear_notes()
+vim.api.nvim_exec_autocmds("BufWritePost", { buffer = sb })
+vim.wait(300)
+eq("source-state save quiet when chezmoi has no warning", #notes, 0)
+
 -- notify_on_open fires once per buffer
 clear_notes()
 vim.api.nvim_exec_autocmds("BufReadPost", { buffer = tb })
