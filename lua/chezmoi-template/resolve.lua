@@ -132,6 +132,31 @@ end
 
 local target_cache = {}
 
+-- True for a source-dir entry chezmoi does not deploy: anything whose path
+-- relative to the source dir has a dot-prefixed component. That is chezmoi's
+-- own rule — `.chezmoi.<fmt>.tmpl`, `.chezmoiignore`, `.chezmoidata/`,
+-- `.chezmoiscripts/`, `.chezmoitemplates/` are source state, and every other
+-- dot entry (`.git/`, `.github/`) is skipped outright. Needed because
+-- `chezmoi target-path` answers for them anyway: it echoes a plausible
+-- $HOME/<name> and exits 0, so callers hand that to `chezmoi apply` and get
+-- "not managed".
+function M.is_source_state(file)
+  local dir = M.source_dir()
+  if not dir then
+    return false
+  end
+  local abs = vim.fs.normalize(vim.fn.fnamemodify(file, ":p"))
+  if abs:sub(1, #dir) ~= dir then
+    return false
+  end
+  for component in vim.gsplit(abs:sub(#dir + 1), "/", { plain = true }) do
+    if component:sub(1, 1) == "." then
+      return true
+    end
+  end
+  return false
+end
+
 -- Deployed target path for a source file via `chezmoi target-path`.
 -- Returns nil for files with no deploy target (.chezmoitemplates/ partials,
 -- special files) or when chezmoi is unavailable.
@@ -140,6 +165,10 @@ function M.target_path(file)
   if cached ~= nil then
     return cached or nil
   end
+  if M.is_source_state(file) then
+    target_cache[file] = false
+    return nil
+  end
   if not M.has_chezmoi() then
     return nil
   end
@@ -147,6 +176,28 @@ function M.target_path(file)
   local target = ret.code == 0 and vim.trim(ret.stdout) or false
   target_cache[file] = target
   return target or nil
+end
+
+-- Warnings chezmoi reports about the current state, e.g. "config file template
+-- has changed, run chezmoi init to regenerate config file" after the config
+-- template is edited. chezmoi tracks that itself (it hashes the template into
+-- its persistent state), so the condition is read from `chezmoi status` stderr
+-- rather than recomputed here. Async only: cb receives the warning lines with
+-- the "chezmoi: warning:" prefix stripped, or nil when there are none.
+function M.warnings(cb)
+  if not M.has_chezmoi() then
+    return cb(nil)
+  end
+  M.chezmoi({ "status" }, { text = true }, function(ret)
+    local lines = {}
+    for line in (ret.stderr or ""):gmatch("[^\r\n]+") do
+      local warning = line:match("^chezmoi:%s*warning:%s*(.+)$")
+      if warning then
+        lines[#lines + 1] = warning
+      end
+    end
+    cb(#lines > 0 and lines or nil)
+  end)
 end
 
 -- Filetype for a target path.

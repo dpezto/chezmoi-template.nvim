@@ -74,7 +74,9 @@ Defaults: >lua
     },
     icons = { enabled = true },  -- mini.icons resolution
     apply = {
-      on_save = true,            -- chezmoi apply <target> after writing
+      on_save = true,            -- chezmoi apply <target> after writing;
+                                 -- chezmoi's own source state (see below)
+                                 -- reports warnings instead
       notify = true,             -- notify on successful applies
     },
     notify_on_open = false,      -- notify when opening a managed source file
@@ -125,6 +127,18 @@ encryption.exclude lua patterns leave matching paths as plain binary.
                                                              *:Chezmoi-apply*
 :Chezmoi apply        Apply the current buffer's deploy target.
 :Chezmoi! apply       Apply all targets.
+
+                      chezmoi's own source state — `.chezmoi.<fmt>.tmpl`,
+                      `.chezmoiignore`, `.chezmoidata/`, `.chezmoiscripts/`,
+                      `.chezmoitemplates/` — has no deploy target, so there is
+                      nothing to apply. Writing one of those files reports any
+                      warning chezmoi has about the current state instead, such
+                      as the config template no longer matching the generated
+                      config. Such a warning describes standing state rather
+                      than the write that surfaced it, so each distinct one is
+                      reported once instead of on every save. Use
+                      `:Chezmoi! apply` to deploy the effect of such an edit, or
+                      `chezmoi init` to regenerate the config.
 
                                                               *:Chezmoi-diff*
 :Chezmoi diff         Diff for the current buffer's target in a split; the

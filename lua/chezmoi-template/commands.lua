@@ -410,10 +410,15 @@ local function define_commands()
   })
 end
 
+-- Last chezmoi warning reported after a source-state write, so a standing one
+-- is not repeated on every save. nil = nothing outstanding.
+local last_warning
+
 function M.setup()
   local config = require("chezmoi-template").config
   vim.api.nvim_create_augroup("chezmoi-template.commands", { clear = true })
   define_commands()
+  last_warning = nil
 
   if config.apply.on_save then
     vim.api.nvim_create_autocmd("BufWritePost", {
@@ -421,6 +426,28 @@ function M.setup()
       callback = function(ctx)
         if not resolve.is_managed(ctx.file) then
           return
+        end
+        -- chezmoi's own source state (.chezmoi.<fmt>.tmpl, .chezmoiignore,
+        -- .chezmoidata/, …) deploys nowhere, so there is nothing to apply.
+        -- Editing it can still invalidate the generated config, which only
+        -- chezmoi can judge — report what it says instead of staying silent.
+        if resolve.is_source_state(ctx.file) then
+          return resolve.warnings(function(warnings)
+            -- A warning describes standing state, not this write: it holds
+            -- until something is done about it, and would otherwise repeat on
+            -- every save, including writes that changed nothing. Report each
+            -- distinct warning once and re-arm when it clears.
+            local text = warnings and table.concat(warnings, "\n") or nil
+            if text == last_warning then
+              return
+            end
+            last_warning = text
+            if text then
+              vim.schedule(function()
+                notify(text, vim.log.levels.WARN)
+              end)
+            end
+          end)
         end
         local target = resolve.target_path(ctx.file)
         if target then

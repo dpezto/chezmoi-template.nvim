@@ -560,6 +560,47 @@ local tp_spawns = spawns["target-path"]
 resolve.target_path(SRC .. "/dot_zshrc.tmpl")
 eq("target_path cached (no respawn)", spawns["target-path"], tp_spawns)
 
+-- resolve: chezmoi's own source state has no target. `chezmoi target-path`
+-- answers for these anyway (exit 0, $HOME/<name>), and feeding that to
+-- `chezmoi apply` fails with "not managed" — so never ask.
+for _, special in ipairs({
+  "/.chezmoi.toml.tmpl",
+  "/.chezmoiignore.tmpl",
+  "/.chezmoiexternal.toml",
+  "/.chezmoidata/machines.yaml",
+  "/.chezmoiscripts/run_once_after_installer.sh.tmpl",
+  "/.chezmoitemplates/log.sh",
+  "/.git/COMMIT_EDITMSG",
+}) do
+  eq("target_path nil for " .. special, resolve.target_path(SRC .. special), nil)
+end
+eq("target_path never spawned for source state", spawns["target-path"], tp_spawns)
+eq("target_path outside source dir still resolves", resolve.target_path(SRC .. "/dot_zshrc.tmpl"), SRC .. "/.zshrc")
+
+-- resolve: both source-state entry points degrade quietly when chezmoi is
+-- unavailable — no source dir means nothing can be classified, and there is no
+-- one to ask for warnings
+do
+  local real_source_dir = resolve.source_dir
+  resolve.source_dir = function()
+    return nil
+  end
+  eq("is_source_state false without a source dir", resolve.is_source_state(SRC .. "/.chezmoi.toml.tmpl"), false)
+  resolve.source_dir = real_source_dir
+
+  local real_has = resolve.has_chezmoi
+  resolve.has_chezmoi = function()
+    return false
+  end
+  local called, got = false, "unset"
+  resolve.warnings(function(w)
+    called, got = true, w
+  end)
+  resolve.has_chezmoi = real_has
+  eq("warnings invokes its callback without chezmoi", called, true)
+  eq("warnings yields nil without chezmoi", got, nil)
+end
+
 -- resolve: data caching + invalidation + broken json
 fake["data"] = { code = 0, stdout = '{"chezmoi":{"os":"darwin"},"email":"e@x"}' }
 resolve.invalidate()
@@ -669,6 +710,50 @@ vim.wait(1000, function()
   return #vim.diagnostic.get(tb) == 0
 end)
 eq("clean render clears diagnostics", #vim.diagnostic.get(tb), 0)
+
+-- saving chezmoi's own source state reports chezmoi's warnings, never applies
+local sb = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_name(sb, SRC .. "/.chezmoi.toml.tmpl")
+fake["status"] = {
+  code = 0,
+  stdout = "",
+  stderr = "chezmoi: warning: config file template has changed, run chezmoi init to regenerate config file\n",
+}
+clear_notes()
+local apply_spawns = spawns["apply"]
+vim.api.nvim_exec_autocmds("BufWritePost", { buffer = sb })
+vim.wait(1000, function()
+  return has_note("run chezmoi init")
+end)
+eq("source-state save surfaces chezmoi's warning", has_note("config file template has changed"), true)
+eq("source-state save strips the chezmoi: warning: prefix", has_note("chezmoi: warning:"), false)
+eq("source-state save does not apply", spawns["apply"], apply_spawns)
+
+-- the same standing warning is not repeated on the next save
+clear_notes()
+vim.api.nvim_exec_autocmds("BufWritePost", { buffer = sb })
+vim.wait(300)
+eq("standing warning reported once, not per save", #notes, 0)
+
+-- a clean status says nothing, and re-arms so the warning is reported again if
+-- the condition comes back
+fake["status"] = { code = 0, stdout = "MM .zshrc\n", stderr = "" }
+clear_notes()
+vim.api.nvim_exec_autocmds("BufWritePost", { buffer = sb })
+vim.wait(300)
+eq("source-state save quiet when chezmoi has no warning", #notes, 0)
+
+fake["status"] = {
+  code = 0,
+  stdout = "",
+  stderr = "chezmoi: warning: config file template has changed, run chezmoi init to regenerate config file\n",
+}
+clear_notes()
+vim.api.nvim_exec_autocmds("BufWritePost", { buffer = sb })
+vim.wait(1000, function()
+  return has_note("run chezmoi init")
+end)
+eq("warning reported again after it clears and returns", has_note("run chezmoi init"), true)
 
 -- notify_on_open fires once per buffer
 clear_notes()
