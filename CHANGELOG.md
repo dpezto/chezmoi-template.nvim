@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.0](https://github.com/dpezto/chezmoi-template.nvim/compare/v1.2.0...v1.3.0) (2026-07-25)
+
+
+### Features
+
+* **apply:** report chezmoi's warnings when saving source state ([#19](https://github.com/dpezto/chezmoi-template.nvim/issues/19)) ([ed3adc6](https://github.com/dpezto/chezmoi-template.nvim/commit/ed3adc6fe3b1a440f7b424a19f842616adb4d2a4))
+
+
+### Bug Fixes
+
+* **activate:** bring up the plugin for managed files that are not templates ([#21](https://github.com/dpezto/chezmoi-template.nvim/issues/21)) ([dad3d9c](https://github.com/dpezto/chezmoi-template.nvim/commit/dad3d9cf63f56a27c762f5026d869f2e0a53fd51))
+* **format:** mask key-position templates correctly, fall back for unmaskable lines ([#18](https://github.com/dpezto/chezmoi-template.nvim/issues/18)) ([c62b9fd](https://github.com/dpezto/chezmoi-template.nvim/commit/c62b9fddb2e91d392ce62a8e2f19fc04abb1da82))
+
 ## [1.2.0](https://github.com/dpezto/chezmoi-template.nvim/compare/v1.1.0...v1.2.0) (2026-07-23)
 
 
