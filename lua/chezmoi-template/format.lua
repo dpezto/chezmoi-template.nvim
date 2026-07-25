@@ -88,9 +88,13 @@ M.formatter = {
           end
           j = j + 1
           local tmpl = line:sub(s, t_end)
+          -- Quote only a standalone token (value position). A token glued to
+          -- identifier chars is part of a bare key or word (`is_{{ $r }}`) —
+          -- quoting it there splits the identifier and breaks TOML/JSON.
           local _, q = res:gsub('\\"', ""):gsub('"', "")
+          local adjacent = res:sub(-1):match("[%w_%-%.]") or line:sub(t_end + 1, t_end + 1):match("[%w_%-%.]")
           local k = sentinel .. i .. "_" .. j
-          k = (q % 2 == 0 and not res:match('"$')) and '"' .. k .. '"' or k
+          k = (q % 2 == 0 and not res:match('"$') and not adjacent) and '"' .. k .. '"' or k
           map[k] = tmpl
           res = res .. k
           pos = t_end + 1

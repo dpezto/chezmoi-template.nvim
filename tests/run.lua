@@ -173,6 +173,22 @@ run_case("multi-line span", "sh", {
   "echo hi",
 })
 
+-- 8. toml: a template spliced into a BARE KEY must stay unquoted — quoting it
+-- there splits the identifier (`is_"TOKEN" = …`) and taplo rejects the file.
+run_case("toml inline key fragment", "toml", {
+  "[data]",
+  "is_{{ $r }} = {{ has $r $roles }}",
+}, {
+  "[data]",
+  "is_{{ $r }} = {{ has $r $roles }}",
+}, function(masked)
+  for _, l in ipairs(masked) do
+    if l:match('^is_"') then
+      return "key-position placeholder was quoted: " .. l
+    end
+  end
+end)
+
 -- Pure-function cases -------------------------------------------------------
 
 local function eq(name, got, want)
