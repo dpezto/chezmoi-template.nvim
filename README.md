@@ -94,9 +94,14 @@ The two annotation lines are optional — with [lazydev.nvim](https://github.com
 
 `lazy = false`, but startup stays cheap: `setup()` only registers filetype
 detection, the treesitter directive, and light triggers — the heavy work (module
-loads, autocmds) is deferred until the first template opens or a `:Chezmoi*`
+loads, autocmds) is deferred until the first managed file opens or a `:Chezmoi*`
 command runs. So it costs ~nothing on sessions where you never touch a chezmoi
-file, whether the plugin loads via `opts` or bare. Keep `lazy = false` — don't
+file, whether the plugin loads via `opts` or bare.
+
+Recognizing a managed file that isn't a template — most of a source directory —
+means knowing where the source directory is, so the first buffer of a session
+resolves it with one `chezmoi source-path`, cached from then on. Set
+`source_dir` to skip even that. Keep `lazy = false` — don't
 set `ft`/`cmd`; the deferral is internal, and filetype detection must register at
 startup for `.tmpl` files to be recognized.
 

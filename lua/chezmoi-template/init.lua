@@ -156,6 +156,16 @@ function M._register()
   -- touches resolve when a tree is actually parsed.
   require("chezmoi-template.inject").register_directive()
 
+  -- Encryption registers on BufReadPre, and an autocmd created while an event
+  -- is already dispatching does not run for that event — so activating from
+  -- another BufReadPre handler would be too late and the first encrypted file
+  -- of a session would open as ciphertext. Register it up front like the
+  -- treesitter directive; setup() only creates an autocmd, and its callback is
+  -- what does the work.
+  if M.config.encryption.enabled then
+    require("chezmoi-template.encryption").setup()
+  end
+
   local group = vim.api.nvim_create_augroup("chezmoi-template.bootstrap", { clear = true })
   vim.api.nvim_create_autocmd({ "BufReadPre", "BufNewFile" }, {
     group = group,
@@ -175,6 +185,23 @@ function M._register()
     pattern = "gotmpl",
     callback = function()
       M._activate()
+    end,
+  })
+  -- Managed files that are not templates — a plain .lua, a *.age — match none
+  -- of the patterns above, so nothing would activate for them and apply-on-save,
+  -- transparent encryption, redirect and notify-on-open would quietly do
+  -- nothing. Most of a chezmoi source dir is such files, so catch them by
+  -- source-dir membership instead of by name. is_managed resolves the source
+  -- dir once (one `chezmoi source-path`, cached for the session) and is a
+  -- string compare from then on; with no chezmoi it returns false without
+  -- spawning anything.
+  vim.api.nvim_create_autocmd({ "BufReadPre", "BufNewFile" }, {
+    group = group,
+    pattern = "*",
+    callback = function(ev)
+      if ev.file ~= "" and require("chezmoi-template.resolve").is_managed(ev.file) then
+        M._activate()
+      end
     end,
   })
   vim.api.nvim_create_user_command("Chezmoi", function(a)
@@ -208,9 +235,8 @@ function M._activate()
   if M.config.icons.enabled then
     require("chezmoi-template.icons").setup()
   end
-  if M.config.encryption.enabled then
-    require("chezmoi-template.encryption").setup()
-  end
+  -- encryption is registered in _register(); re-running setup() here would clear
+  -- its augroup and drop the buffer-local handlers it just installed.
   require("chezmoi-template.commands").setup()
   if M.config.diagnostics.enabled then
     require("chezmoi-template.diagnostics").setup()

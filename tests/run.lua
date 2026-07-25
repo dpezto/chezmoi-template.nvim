@@ -285,6 +285,18 @@ local function eq(name, got, want)
   end
 end
 
+-- bootstrap (still pre-activation here): most of a chezmoi source dir is plain
+-- files, not templates, so activation cannot key off *.tmpl alone — a `*`
+-- BufReadPre carries source-dir membership.
+do
+  local pats = {}
+  for _, a in ipairs(vim.api.nvim_get_autocmds({ event = "BufReadPre", group = "chezmoi-template.bootstrap" })) do
+    pats[a.pattern] = true
+  end
+  eq("bootstrap watches every buffer for managed files", pats["*"], true)
+  eq("bootstrap still watches templates by name", pats["*.tmpl"], true)
+end
+
 -- json targets are formatted as jsonc so the // comment placeholders parse; the
 -- scratch buffer is renamed accordingly even when the target is plain .json
 do
@@ -862,6 +874,19 @@ do
   vim.cmd("Chezmoi pick")
   eq("unknown picker backend errors", has_note("unknown picker"), true)
   ct.config.picker = nil
+end
+
+-- _activate must not re-register encryption: its BufReadPre callback installs
+-- buffer-local handlers for the file being read, and clearing the augroup
+-- mid-read would drop them
+do
+  local count = function()
+    return #vim.api.nvim_get_autocmds({ group = "chezmoi-template.encryption" })
+  end
+  local before = count()
+  ct._activated = false
+  ct._activate()
+  eq("activate leaves the encryption augroup intact", count(), before)
 end
 
 -- encryption: decrypt on read, re-encrypt on write, exclude patterns
