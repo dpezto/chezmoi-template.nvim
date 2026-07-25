@@ -131,8 +131,11 @@ encryption.exclude lua patterns leave matching paths as plain binary.
                       nothing to apply. Writing one of those files reports any
                       warning chezmoi has about the current state instead, such
                       as the config template no longer matching the generated
-                      config. Use `:Chezmoi! apply` to deploy the effect of such
-                      an edit, or `chezmoi init` to regenerate the config.
+                      config. Such a warning describes standing state rather
+                      than the write that surfaced it, so each distinct one is
+                      reported once instead of on every save. Use
+                      `:Chezmoi! apply` to deploy the effect of such an edit, or
+                      `chezmoi init` to regenerate the config.
 
                                                               *:Chezmoi-diff*
 :Chezmoi diff         Diff for the current buffer's target in a split; the

@@ -570,12 +570,31 @@ eq("source-state save surfaces chezmoi's warning", has_note("config file templat
 eq("source-state save strips the chezmoi: warning: prefix", has_note("chezmoi: warning:"), false)
 eq("source-state save does not apply", spawns["apply"], apply_spawns)
 
--- a clean status says nothing
+-- the same standing warning is not repeated on the next save
+clear_notes()
+vim.api.nvim_exec_autocmds("BufWritePost", { buffer = sb })
+vim.wait(300)
+eq("standing warning reported once, not per save", #notes, 0)
+
+-- a clean status says nothing, and re-arms so the warning is reported again if
+-- the condition comes back
 fake["status"] = { code = 0, stdout = "MM .zshrc\n", stderr = "" }
 clear_notes()
 vim.api.nvim_exec_autocmds("BufWritePost", { buffer = sb })
 vim.wait(300)
 eq("source-state save quiet when chezmoi has no warning", #notes, 0)
+
+fake["status"] = {
+  code = 0,
+  stdout = "",
+  stderr = "chezmoi: warning: config file template has changed, run chezmoi init to regenerate config file\n",
+}
+clear_notes()
+vim.api.nvim_exec_autocmds("BufWritePost", { buffer = sb })
+vim.wait(1000, function()
+  return has_note("run chezmoi init")
+end)
+eq("warning reported again after it clears and returns", has_note("run chezmoi init"), true)
 
 -- notify_on_open fires once per buffer
 clear_notes()
