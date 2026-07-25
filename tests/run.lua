@@ -442,6 +442,30 @@ end
 eq("target_path never spawned for source state", spawns["target-path"], tp_spawns)
 eq("target_path outside source dir still resolves", resolve.target_path(SRC .. "/dot_zshrc.tmpl"), SRC .. "/.zshrc")
 
+-- resolve: both source-state entry points degrade quietly when chezmoi is
+-- unavailable — no source dir means nothing can be classified, and there is no
+-- one to ask for warnings
+do
+  local real_source_dir = resolve.source_dir
+  resolve.source_dir = function()
+    return nil
+  end
+  eq("is_source_state false without a source dir", resolve.is_source_state(SRC .. "/.chezmoi.toml.tmpl"), false)
+  resolve.source_dir = real_source_dir
+
+  local real_has = resolve.has_chezmoi
+  resolve.has_chezmoi = function()
+    return false
+  end
+  local called, got = false, "unset"
+  resolve.warnings(function(w)
+    called, got = true, w
+  end)
+  resolve.has_chezmoi = real_has
+  eq("warnings invokes its callback without chezmoi", called, true)
+  eq("warnings yields nil without chezmoi", got, nil)
+end
+
 -- resolve: data caching + invalidation + broken json
 fake["data"] = { code = 0, stdout = '{"chezmoi":{"os":"darwin"},"email":"e@x"}' }
 resolve.invalidate()
