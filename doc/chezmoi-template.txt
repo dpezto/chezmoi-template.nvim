@@ -24,6 +24,9 @@ source files, so you edit them natively instead of going through
   treesitter-injected (a dot_zshrc.tmpl highlights as Go template + zsh).
 - A conform.nvim formatter formats templates with the TARGET filetype's
   formatter by masking Go-template spans and restoring them afterwards.
+  Lines with no valid placeholder form (a template glued to a bare word, a
+  control-flow pair wrapping an entry) are masked whole and come back
+  untouched, so they never block formatting the rest of the file.
 - mini.icons lookups resolve source names (private_dot_config/...) to their
   deployed targets.
 - Optional transparent decrypt/encrypt of chezmoi-managed encrypted files

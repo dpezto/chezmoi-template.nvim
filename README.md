@@ -43,6 +43,8 @@ Most chezmoi integrations wrap the `chezmoi edit` CLI: temporary buffers, watche
 
   ![Formatting a template as its target filetype](assets/format.gif)
 
+  A few template shapes have no placeholder form the target syntax accepts — a template glued to a bare word (`k = {{ .x }}suffix`), or a control-flow pair wrapping a whole entry (`{{ if .on }}k = 1{{ end }}`). Those lines are masked whole instead, so they come back untouched while the rest of the file still formats.
+
 - **Target-aware icons** ([mini.icons](https://github.com/nvim-mini/mini.icons)). `private_dot_config/ghostty/config.tmpl` shows the ghostty icon, not a generic template glyph. Any combination of chezmoi source-state attributes (`private_`, `encrypted_`, `exact_`, `dot_`, `.tmpl`, `.age`, …) resolves to the deployed name.
 - **Transparent encryption** (opt-in). chezmoi-managed `*.age` files decrypt on open and re-encrypt on save via `chezmoi decrypt` / `chezmoi encrypt` — whatever your chezmoi config uses (age, rage, builtin age, even gpg) just works. `encrypted_*.tmpl.age` still gets full template + target highlighting.
 - **`%` matching for template delimiters** ([vim-matchup](https://github.com/andymass/vim-matchup)). `{{ if }}` ⇄ `{{ else }}` ⇄ `{{ end }}`, including `{{-` trim markers.
