@@ -931,6 +931,7 @@ do
   end)
   eq("redirect jumps to the chezmoi source", has_note("redirected to source"), true)
   eq("redirect edits the source path", vim.api.nvim_buf_get_name(0):find("dot_chezmoi%-test%-deployed$") ~= nil, true)
+  eq("redirect wipes the target buffer", vim.api.nvim_buf_is_valid(rb), false)
 end
 
 -- bootstrap: with redirect on, a deployed managed file activates the plugin
@@ -956,6 +957,7 @@ do
     return has_note("redirected to source")
   end)
   eq("cold-start redirect lands on the source", bufname(0):find("dot_chezmoi%-test%-cold$") ~= nil, true)
+  eq("cold-start redirect wipes the target buffer", vim.api.nvim_buf_is_valid(cb), false)
 end
 
 -- :Chezmoi source from a deployed file / from inside the source dir
