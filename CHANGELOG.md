@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.0.0](https://github.com/dpezto/chezmoi-template.nvim/compare/v1.3.0...v2.0.0) (2026-07-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* **picker:** decrypted previews; exclude patterns stack on the defaults ([#26](https://github.com/dpezto/chezmoi-template.nvim/issues/26))
+
+### Features
+
+* **picker:** decrypted previews; exclude patterns stack on the defaults ([#26](https://github.com/dpezto/chezmoi-template.nvim/issues/26)) ([db389a9](https://github.com/dpezto/chezmoi-template.nvim/commit/db389a9ad3a892ec77245c0a4b0686871cbdf919))
+
+
+### Bug Fixes
+
+* **apply:** skip undeployed source files, activate for deployed files on redirect ([#23](https://github.com/dpezto/chezmoi-template.nvim/issues/23)) ([5de7ae2](https://github.com/dpezto/chezmoi-template.nvim/commit/5de7ae2fa1803bab4bd8b88ee2ac8036b8d21dc0))
+* **encryption:** read the enabled flag at dispatch, not at registration ([#25](https://github.com/dpezto/chezmoi-template.nvim/issues/25)) ([246de7f](https://github.com/dpezto/chezmoi-template.nvim/commit/246de7fe2e831a7bf67910eef6a9905c6ebd53bf))
+* **matchup:** match else-with openers and full else chains ([#22](https://github.com/dpezto/chezmoi-template.nvim/issues/22)) ([ef43db1](https://github.com/dpezto/chezmoi-template.nvim/commit/ef43db10d289aa99817c7a64433993f084df59b2))
+
 ## [1.3.0](https://github.com/dpezto/chezmoi-template.nvim/compare/v1.2.0...v1.3.0) (2026-07-25)
 
 
