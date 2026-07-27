@@ -132,6 +132,11 @@ end
 
 local target_cache = {}
 
+-- Absolute *source* paths of all managed files (declared here because
+-- target_path below reads it). See M.source_set.
+---@type table|false|nil
+local source_set_cache
+
 -- True for a source-dir entry chezmoi does not deploy: anything whose path
 -- relative to the source dir has a dot-prefixed component. That is chezmoi's
 -- own rule — `.chezmoi.<fmt>.tmpl`, `.chezmoiignore`, `.chezmoidata/`,
@@ -171,6 +176,24 @@ function M.target_path(file)
   end
   if not M.has_chezmoi() then
     return nil
+  end
+  -- Dot entries are not the only undeployed source files: chezmoi also skips
+  -- e.g. a source-root README.md, yet `target-path` still echoes $HOME/README.md
+  -- and exits 0, so apply would fail with "not managed". Names can't classify
+  -- these (a nested dot_config/nvim/README.md IS managed) — only membership in
+  -- the managed listing can. A miss refetches the listing once, so a file added
+  -- after the cache was built still resolves.
+  local set = M.source_set()
+  if set then
+    local abs = vim.fs.normalize(vim.fn.fnamemodify(file, ":p"))
+    if not set[abs] then
+      source_set_cache = nil
+      set = M.source_set()
+      if set and not set[abs] then
+        target_cache[file] = false
+        return nil
+      end
+    end
   end
   local ret = M.chezmoi({ "target-path", file }, { text = true }):wait()
   local target = ret.code == 0 and vim.trim(ret.stdout) or false
@@ -257,9 +280,6 @@ end
 -- per-file `target-path` spawn for source files with no deploy target
 -- (partials, scripts). Returns nil when the listing is unavailable so callers
 -- fall back to target_path.
----@type table|false|nil
-local source_set_cache
-
 function M.source_set()
   if source_set_cache == nil then
     source_set_cache = managed_listing("source-absolute") or false
