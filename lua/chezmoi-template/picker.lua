@@ -16,8 +16,8 @@ local resolve = require("chezmoi-template.resolve")
 
 -- Hidden by default: never-edited chezmoi internals. Deliberately keeps
 -- .chezmoiignore, .chezmoiscripts/, .chezmoitemplates/ and .chezmoiexternal*
--- (all editable with target-language support). config.picker.exclude = {}
--- shows everything; a non-nil list replaces this one.
+-- (all editable with target-language support). config.picker.exclude patterns
+-- are hidden on top of this list; exclude = false shows everything.
 M.DEFAULT_EXCLUDE = {
   "^%.git/",
   "^%.chezmoi%.%w+%.tmpl$", -- .chezmoi.toml.tmpl / .chezmoi.yaml.tmpl config template
@@ -29,16 +29,24 @@ M.DEFAULT_EXCLUDE = {
 -- Normalized picker config: a plain string is shorthand for { backend = str }
 -- (pre-1.2 config shape); missing fields get defaults. Normalization lives
 -- here, not in the setup() merge — tbl_deep_extend can't merge string→table.
+-- exclude: user patterns extend the internals defaults instead of replacing
+-- them — nobody hiding their ssh keys wants .git/ back as the price — and
+-- exclude = false is the show-everything escape hatch.
 local function conf()
   local c = require("chezmoi-template").config.picker
   if type(c) == "string" then
     c = { backend = c }
   end
   c = c or {}
+  local exclude = {}
+  if c.exclude ~= false then
+    vim.list_extend(exclude, M.DEFAULT_EXCLUDE)
+    vim.list_extend(exclude, c.exclude or {})
+  end
   return {
     backend = c.backend,
     display = c.display or "target",
-    exclude = c.exclude or M.DEFAULT_EXCLUDE,
+    exclude = exclude,
   }
 end
 
@@ -127,6 +135,40 @@ local function seed_preview(buf, abs)
 end
 M._seed_preview = seed_preview
 
+-- Preview buffers read the file's raw bytes (no BufReadPre fires for them), so
+-- a managed encrypted entry would preview as age/gpg armor. Swap in the
+-- decrypted text and the target filetype instead, mirroring the transparent
+-- decrypt-on-read. Decrypted once per file per picker session — every cursor
+-- move re-previews and each decrypt is a chezmoi spawn.
+local decrypt_cache = {}
+
+local function preview_decrypted(buf, abs)
+  local text = decrypt_cache[abs]
+  if text == nil then
+    text = require("chezmoi-template.encryption").text(abs) or false
+    decrypt_cache[abs] = text
+  end
+  if not text then
+    return false
+  end
+  local lines = vim.split(text, "\n")
+  if lines[#lines] == "" then
+    table.remove(lines)
+  end
+  vim.bo[buf].modifiable = true
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  -- same filetype routing as the real decrypt-on-read (encryption.read_post):
+  -- the deployed name picks the filetype, *.tmpl.age routes through gotmpl
+  local target = resolve.target_path(abs)
+  local ft = target and vim.filetype.match({ filename = target, buf = buf }) or nil
+  if ft then
+    resolve.seed(buf, ft)
+    vim.bo[buf].filetype = abs:match("%.tmpl") and "gotmpl" or ft
+  end
+  return true
+end
+M._preview_decrypted = preview_decrypted
+
 local function edit(abs)
   vim.cmd.edit(vim.fn.fnameescape(abs))
 end
@@ -158,6 +200,8 @@ local backends = {
           if ctx.buf ~= buf then
             seed_preview(ctx.buf, ctx.item.file)
           end
+          -- after the stock previewer: it loaded the raw bytes, overwrite them
+          preview_decrypted(ctx.buf, ctx.item.file)
           return ret
         end,
         -- default confirm jumps to item.file
@@ -192,6 +236,9 @@ local backends = {
               -- maker reads + highlights async, so the synchronous seed
               -- lands before its treesitter start
               seed_preview(self.state.bufnr, entry.value.abs)
+              if preview_decrypted(self.state.bufnr, entry.value.abs) then
+                return
+              end
               tconf.buffer_previewer_maker(entry.value.abs, self.state.bufnr, { bufname = self.state.bufname })
             end,
           }),
@@ -226,6 +273,7 @@ local backends = {
         -- treesitter so injection picks the vars up
         if self.preview_bufnr and vim.api.nvim_buf_is_valid(self.preview_bufnr) then
           seed_preview(self.preview_bufnr, entry.path)
+          preview_decrypted(self.preview_bufnr, entry.path)
         end
       end
       fzf.fzf_exec(lines, {
@@ -256,6 +304,9 @@ local backends = {
           end, entries),
           preview = function(buf_id, item)
             seed_preview(buf_id, item.path)
+            if preview_decrypted(buf_id, item.path) then
+              return
+            end
             MiniPick.default_preview(buf_id, item)
           end,
           -- default choose opens item.path
@@ -291,6 +342,7 @@ function M.open()
     return notify("source directory not found", vim.log.levels.ERROR)
   end
   local c = conf()
+  decrypt_cache = {} -- fresh per session: the source may have been re-encrypted
   local entries = M.build(M.walk(src), src, c)
   if #entries == 0 then
     return notify("no source files to pick", vim.log.levels.WARN)
