@@ -1388,6 +1388,19 @@ do
   ct._register()
   local ok, autocmds = pcall(vim.api.nvim_get_autocmds, { group = "chezmoi-template.encryption" })
   eq("_register wires encryption regardless of the flag", ok and #autocmds > 0, true)
+
+  -- and with the flag off that registration stays inert: the callback bails
+  -- before touching the buffer, so a managed *.age opens as the raw bytes on disk
+  local off = SRC .. "/enc_disabled.age"
+  local f = assert(io.open(off, "wb"))
+  f:write("CIPHERTEXT")
+  f:close()
+  fake["decrypt"] = { code = 0, stdout = "must not appear\n" }
+  vim.cmd.edit(vim.fn.fnameescape(off))
+  local ob = vim.api.nvim_get_current_buf()
+  eq("*.age opens raw while encryption is disabled", vim.api.nvim_buf_get_lines(ob, 0, -1, false), { "CIPHERTEXT" })
+  vim.api.nvim_buf_delete(ob, { force = true })
+  os.remove(off)
 end
 
 -- flush coverage stats before exit (`nvim -l` may skip luacov's exit hook)
