@@ -161,10 +161,11 @@ function M._register()
   -- another BufReadPre handler would be too late and the first encrypted file
   -- of a session would open as ciphertext. Register it up front like the
   -- treesitter directive; setup() only creates an autocmd, and its callback is
-  -- what does the work.
-  if M.config.encryption.enabled then
-    require("chezmoi-template.encryption").setup()
-  end
+  -- what does the work. Unconditional: _register() runs once, but setup() may
+  -- run twice (the plugin/ bootstrap, then a lazy.nvim opts merge), and the
+  -- second call is usually the one enabling encryption — so the callback reads
+  -- config.encryption.enabled itself rather than this deciding for it.
+  require("chezmoi-template.encryption").setup()
 
   local group = vim.api.nvim_create_augroup("chezmoi-template.bootstrap", { clear = true })
   vim.api.nvim_create_autocmd({ "BufReadPre", "BufNewFile" }, {

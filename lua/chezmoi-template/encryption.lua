@@ -92,6 +92,14 @@ function M.setup()
     -- .age (age/rage) and .asc (gpg) — chezmoi's encryption suffixes
     pattern = { "*.age", "*.asc" },
     callback = function(ctx)
+      -- Read `enabled` here, not at registration: setup() runs twice under
+      -- lazy.nvim (the plugin/ bootstrap with defaults, then the opts merge),
+      -- so gating registration on the first call left encryption dead whenever
+      -- opts were what turned it on. Every other option is read at dispatch
+      -- time for the same reason.
+      if not cfg().enabled then
+        return
+      end
       -- Excluded paths (e.g. passphrase-encrypted bootstrap keys) and files
       -- outside the source dir open as plain binary. Match the normalized
       -- (forward-slash) path so patterns are portable — a raw autocmd path is
