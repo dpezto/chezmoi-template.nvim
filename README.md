@@ -147,7 +147,7 @@ require("chezmoi-template").setup({
   picker = {
     backend = nil,             -- "snacks"|"telescope"|"fzf-lua"|"mini"|"select"; nil = auto
     display = "target",        -- entry labels: "target" (.zshrc) or "source" (dot_zshrc.tmpl)
-    exclude = nil,             -- lua patterns to hide; nil = built-in internals list, {} = show all
+    exclude = {},              -- lua patterns hidden on top of the internals list; false = show all
   },
   encryption = {
     enabled = false,           -- opt-in; delegates to chezmoi decrypt/encrypt
@@ -235,8 +235,8 @@ The source only activates in gotmpl buffers. Inside `{{ … }}` it narrows by cu
 `:Chezmoi pick` opens a file picker over the source directory. Entries are built by the plugin (via `git ls-files`, so the source repo's `.gitignore` is respected; plain fs walk for non-git source dirs), identically across backends:
 
 - **Labels** show the deployed target name (`dot_zshrc.tmpl` → `.zshrc`); set `picker.display = "source"` for raw source names.
-- **Chezmoi internals are hidden** by default (`.git/`, `.chezmoi.$FORMAT.tmpl`, `.chezmoiversion`, `.chezmoiroot`, `.chezmoidata.*`) while editable specials stay listed (`.chezmoiignore`, `.chezmoiscripts/`, `.chezmoitemplates/`, `.chezmoiexternal.*`). `picker.exclude` takes your own lua patterns (matched against the source-relative path) and replaces the built-in list; `{}` shows everything.
-- **Preview highlights the target language** inside the template, same as opening the file.
+- **Chezmoi internals are hidden** by default (`.git/`, `.chezmoi.$FORMAT.tmpl`, `.chezmoiversion`, `.chezmoiroot`, `.chezmoidata.*`) while editable specials stay listed (`.chezmoiignore`, `.chezmoiscripts/`, `.chezmoitemplates/`, `.chezmoiexternal.*`). `picker.exclude` hides your own lua patterns (matched against the source-relative path) on top of that list — e.g. `exclude = { "^private_dot_ssh/.*id_" }` keeps ssh keys out of the picker while `.ssh/config` stays. `exclude = false` shows everything.
+- **Preview highlights the target language** inside the template, same as opening the file. Managed encrypted files (`*.age`, `*.asc`) preview decrypted when `encryption.enabled` is on, typed as their deployed target.
 
 Backend auto-detects among loaded pickers (snacks → telescope → fzf-lua → mini.pick) with a `vim.ui.select` fallback; if your picker is lazy-loaded it may not be detected — set `picker.backend = "telescope"` (etc.) explicitly (a plain string `picker = "telescope"` still works as shorthand). Map it however you like:
 

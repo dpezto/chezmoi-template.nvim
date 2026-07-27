@@ -1186,6 +1186,11 @@ do
           picked.snacks = o
         end,
       },
+      util = {
+        icon = function(name)
+          return "N:" .. name, "NameHl"
+        end,
+      },
     }
   end
   package.preload["telescope.pickers"] = function()
@@ -1230,10 +1235,13 @@ do
     return {
       buffer_or_file = {
         extend = function()
-          return { super = {} }
+          return { super = { new = function() end, preview_buf_post = function() end } }
         end,
       },
     }
+  end
+  package.preload["snacks.picker.preview"] = function()
+    return { file = function() end }
   end
   package.preload["mini.pick"] = function()
     return {
@@ -1256,6 +1264,13 @@ do
   vim.cmd("Chezmoi pick")
   local sitem = by_display(picked.snacks.items, "text")
   eq("snacks gets display text + abs file", { sitem.text, sitem.file }, { ".pick_me", pick_me })
+  -- entry icons resolve the source path to its deploy target (mini.icons fake
+  -- echoes the name it was asked for), so path-context filetypes (.ssh/config,
+  -- git/config) get their real icon; plain files fall back to the name lookup
+  local chunk = picked.snacks.format(sitem)[1][1]
+  eq("snacks icon resolves to the deploy target", chunk, SRC .. "/.pick_me ")
+  local plain = picked.snacks.format({ text = "run.lua", file = SRC .. "/run.lua" })[1][1]
+  eq("snacks icon falls back for plain files", plain, "N:run.lua ")
 
   ct.config.picker = "telescope"
   vim.cmd("Chezmoi pick")
@@ -1278,12 +1293,113 @@ do
   local mitem = by_display(picked.mini.source.items, "text")
   eq("mini gets display text + abs path", { mitem.text, mitem.path }, { ".pick_me", pick_me })
 
+  -- exclude semantics: user patterns stack on the internals defaults instead
+  -- of replacing them; exclude = false lifts every filter
+  local rootf = SRC .. "/.chezmoiroot"
+  local rff = assert(io.open(rootf, "w"))
+  rff:write("x")
+  rff:close()
+  local function displays()
+    local out = {}
+    for _, it in ipairs(picked.snacks.items) do
+      out[it.text] = true
+    end
+    return out
+  end
+  ct.config.picker = { backend = "snacks", exclude = { "pick_me" } }
+  vim.cmd("Chezmoi pick")
+  local shown = displays()
+  eq("user exclude hides its pattern", shown[".pick_me"], nil)
+  eq("internals defaults still apply alongside it", shown[".chezmoiroot"], nil)
+  ct.config.picker = { backend = "snacks", exclude = false }
+  vim.cmd("Chezmoi pick")
+  shown = displays()
+  eq("exclude = false shows everything", { shown[".pick_me"], shown[".chezmoiroot"] }, { true, true })
+  os.remove(rootf)
+
+  -- decrypted preview: every backend's previewer swaps the raw age/gpg armor
+  -- for `chezmoi decrypt` output, typed as the deployed target (gotmpl for
+  -- *.tmpl.age), decrypting each file once per picker session
+  local enc_pick = SRC .. "/enc_pick.tmpl.age"
+  local ef = assert(io.open(enc_pick, "wb"))
+  ef:write("CIPHERTEXT")
+  ef:close()
+  fake["decrypt"] = { code = 0, stdout = "secret {{ .x }}\n" }
+  fake["managed"] = { code = 0, stdout = enc_pick .. "\n" }
+  resolve.invalidate()
+  local d0 = spawns["decrypt"] or 0
+
+  ct.config.picker = "snacks"
+  vim.cmd("Chezmoi pick")
+  local pv1 = vim.api.nvim_create_buf(false, true)
+  picked.snacks.preview({ buf = pv1, item = { file = enc_pick } })
+  eq("snacks preview decrypts", vim.api.nvim_buf_get_lines(pv1, 0, -1, false), { "secret {{ .x }}" })
+  eq("tmpl.age preview typed gotmpl", vim.bo[pv1].filetype, "gotmpl")
+  eq("decrypted preview seeds target ft", vim.b[pv1].chezmoi_target_ft, "zsh")
+  picked.snacks.preview({ buf = pv1, item = { file = enc_pick } })
+  eq("preview decrypts once per session", spawns["decrypt"], d0 + 1)
+
+  ct.config.picker = "telescope"
+  vim.cmd("Chezmoi pick")
+  local eentry, pentry
+  for _, e in ipairs(picked.telescope.finder.results) do
+    if e.abs == enc_pick then
+      eentry = picked.telescope.finder.entry_maker(e)
+    elseif e.abs == pick_me then
+      pentry = picked.telescope.finder.entry_maker(e)
+    end
+  end
+  local pv2 = vim.api.nvim_create_buf(false, true)
+  picked.telescope.previewer.define_preview({ state = { bufnr = pv2 } }, eentry)
+  eq("telescope preview decrypts", vim.api.nvim_buf_get_lines(pv2, 0, -1, false), { "secret {{ .x }}" })
+  -- a plain entry falls through to telescope's own maker
+  local made = false
+  require("telescope.config").values.buffer_previewer_maker = function()
+    made = true
+  end
+  picked.telescope.previewer.define_preview({ state = { bufnr = pv2 } }, pentry)
+  eq("plain entry falls through to the maker", made, true)
+
+  ct.config.picker = "fzf-lua"
+  vim.cmd("Chezmoi pick")
+  local pv3 = vim.api.nvim_create_buf(false, true)
+  picked.fzf.opts.previewer.preview_buf_post({ preview_bufnr = pv3 }, { path = enc_pick })
+  eq("fzf-lua preview decrypts", vim.api.nvim_buf_get_lines(pv3, 0, -1, false), { "secret {{ .x }}" })
+
+  ct.config.picker = "mini"
+  vim.cmd("Chezmoi pick")
+  local pv4 = vim.api.nvim_create_buf(false, true)
+  picked.mini.source.preview(pv4, { path = enc_pick })
+  eq("mini preview decrypts", vim.api.nvim_buf_get_lines(pv4, 0, -1, false), { "secret {{ .x }}" })
+
+  for _, b in ipairs({ pv1, pv2, pv3, pv4 }) do
+    vim.api.nvim_buf_delete(b, { force = true })
+  end
+  os.remove(enc_pick)
+
   ct.config.picker = nil
   local pb2 = vim.fn.bufnr(pick_me)
   if pb2 ~= -1 then
     vim.api.nvim_buf_delete(pb2, { force = true })
   end
   os.remove(pick_me)
+end
+
+-- encryption.text: the read-only decrypt for preview consumers gates on the
+-- same eligibility as the transparent layer
+do
+  local enc = require("chezmoi-template.encryption")
+  ct.config.encryption.exclude = { "skipme" }
+  fake["decrypt"] = { code = 0, stdout = "plain\n" }
+  eq("text decrypts a managed encrypted file", enc.text(SRC .. "/t.age"), "plain\n")
+  eq("text nil for a non-encrypted suffix", enc.text(SRC .. "/t.txt"), nil)
+  eq("text nil outside the source dir", enc.text("/outside/t.age"), nil)
+  eq("text nil for an excluded path", enc.text(SRC .. "/skipme.age"), nil)
+  fake["decrypt"] = { code = 1, stderr = "boom" }
+  eq("text nil when decryption fails", enc.text(SRC .. "/t.age"), nil)
+  ct.config.encryption.enabled = false
+  eq("text nil while encryption is disabled", enc.text(SRC .. "/t.age"), nil)
+  ct.config.encryption.enabled = true
 end
 
 -- inject directive: only runs where the gotmpl parser exists (skipped in CI)

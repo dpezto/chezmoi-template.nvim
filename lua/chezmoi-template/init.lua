@@ -36,7 +36,7 @@ local M = {}
 ---@class chezmoi-template.Config.picker
 ---@field backend? "snacks"|"telescope"|"fzf-lua"|"mini"|"select" nil = auto-detect among loaded pickers
 ---@field display? "target"|"source" entry labels: deployed names (.zshrc) or raw source names (dot_zshrc.tmpl)
----@field exclude? string[] lua patterns (vs the source-relative path) to hide; nil = built-in internals list, {} = show all
+---@field exclude? string[]|false lua patterns (vs the source-relative path) hidden on top of the built-in internals list; false = show everything
 
 ---@class chezmoi-template.Config.encryption
 ---@field enabled? boolean transparent decrypt/encrypt of chezmoi-managed encrypted files (*.age, *.asc)
@@ -103,10 +103,10 @@ M.config = {
     -- entry labels: "target" = deployed names (dot_zshrc.tmpl -> .zshrc),
     -- "source" = raw source-relative names
     display = "target",
-    -- lua patterns (vs the source-relative path) to hide; nil = built-in
+    -- lua patterns (vs the source-relative path) hidden on top of the built-in
     -- internals list (picker.DEFAULT_EXCLUDE: .git/, .chezmoi.$FORMAT.tmpl,
-    -- .chezmoiversion, .chezmoiroot, .chezmoidata.*), {} = show everything
-    exclude = nil,
+    -- .chezmoiversion, .chezmoiroot, .chezmoidata.*); false = show everything
+    exclude = {},
   },
   -- transparent decrypt/encrypt of chezmoi-managed encrypted files (*.age, *.asc)
   -- via `chezmoi decrypt` / `chezmoi encrypt` (age/rage/builtin/gpg, identities,

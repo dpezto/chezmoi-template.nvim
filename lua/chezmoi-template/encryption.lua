@@ -36,6 +36,41 @@ local function encrypt(text, file)
   return ret
 end
 
+-- A file the transparent layer handles: encryption on, an encrypted suffix,
+-- not excluded, inside the source dir. Read per call, not at registration:
+-- setup() can run twice (the plugin/ bootstrap with defaults, then a lazy.nvim
+-- opts merge), and the second call is usually the one enabling encryption.
+-- Excludes (e.g. passphrase-encrypted bootstrap keys) match the normalized
+-- (forward-slash) path so patterns are portable — a raw autocmd path is
+-- backslashed on Windows and would dodge "/"-style patterns.
+local function eligible(file)
+  if not cfg().enabled then
+    return false
+  end
+  local nfile = vim.fs.normalize(file)
+  if not (nfile:match("%.age$") or nfile:match("%.asc$")) then
+    return false
+  end
+  for _, pat in ipairs(cfg().exclude) do
+    if nfile:match(pat) then
+      return false
+    end
+  end
+  return resolve.is_managed(file)
+end
+
+-- Decrypted text of a managed encrypted file, or nil (encryption off, not an
+-- encrypted managed file, excluded, or decryption failed). For read-only
+-- consumers like the picker preview; buffers editing the file go through the
+-- autocmds below instead.
+function M.text(file)
+  if not eligible(file) then
+    return nil
+  end
+  local ret = decrypt(file)
+  return ret.code == 0 and ret.stdout or nil
+end
+
 local function read_post(args)
   local ret = decrypt(args.file)
   if ret.code ~= 0 then
@@ -92,25 +127,8 @@ function M.setup()
     -- .age (age/rage) and .asc (gpg) — chezmoi's encryption suffixes
     pattern = { "*.age", "*.asc" },
     callback = function(ctx)
-      -- Read `enabled` here, not at registration: setup() runs twice under
-      -- lazy.nvim (the plugin/ bootstrap with defaults, then the opts merge),
-      -- so gating registration on the first call left encryption dead whenever
-      -- opts were what turned it on. Every other option is read at dispatch
-      -- time for the same reason.
-      if not cfg().enabled then
-        return
-      end
-      -- Excluded paths (e.g. passphrase-encrypted bootstrap keys) and files
-      -- outside the source dir open as plain binary. Match the normalized
-      -- (forward-slash) path so patterns are portable — a raw autocmd path is
-      -- backslashed on Windows and would dodge "/"-style patterns.
-      local nfile = vim.fs.normalize(ctx.file)
-      for _, pat in ipairs(cfg().exclude) do
-        if nfile:match(pat) then
-          return
-        end
-      end
-      if not resolve.is_managed(ctx.file) then
+      -- Disabled, excluded, and unmanaged files open as plain binary
+      if not eligible(ctx.file) then
         return
       end
       -- An encrypted file is a managed source file like any other: bring up the
