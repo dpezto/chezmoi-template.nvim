@@ -932,6 +932,20 @@ do
   eq("redirect jumps to the chezmoi source", has_note("redirected to source"), true)
   eq("redirect edits the source path", vim.api.nvim_buf_get_name(0):find("dot_chezmoi%-test%-deployed$") ~= nil, true)
   eq("redirect wipes the target buffer", vim.api.nvim_buf_is_valid(rb), false)
+
+  -- a managed target loaded in the background (picker preview) has no window:
+  -- leave it alone
+  local hidden = vim.fs.normalize(vim.fn.getcwd()) .. "/chezmoi-test-hidden"
+  fake["managed"] = { code = 0, stdout = hidden .. "\n" }
+  resolve.invalidate()
+  local hb = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_buf_set_name(hb, hidden)
+  clear_notes()
+  vim.api.nvim_exec_autocmds("BufReadPost", { buffer = hb })
+  vim.wait(300)
+  eq("background target buffer is not redirected", has_note("redirected to source"), false)
+  eq("background target buffer survives", vim.api.nvim_buf_is_valid(hb), true)
+  vim.api.nvim_buf_delete(hb, { force = true })
 end
 
 -- bootstrap: with redirect on, a deployed managed file activates the plugin
@@ -942,6 +956,9 @@ do
   ct._registered = false
   ct._activated = false
   ct._register()
+  -- unnamed buffers pass through without activating
+  vim.api.nvim_exec_autocmds("BufReadPre", { buffer = vim.api.nvim_create_buf(false, true) })
+  eq("unnamed buffer does not activate", ct._activated, false)
   local deployed = vim.fs.normalize(vim.fn.getcwd()) .. "/chezmoi-test-cold"
   fake["managed"] = { code = 0, stdout = deployed .. "\n" }
   resolve.invalidate()
