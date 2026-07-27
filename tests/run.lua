@@ -1106,6 +1106,43 @@ do
   os.remove(skip)
 end
 
+-- encryption must survive the two-call setup order: the plugin/ bootstrap runs
+-- setup({}) with encryption off, then lazy.nvim merges `opts` and turns it on.
+-- _register() only runs once, so deciding there left the augroup missing and
+-- every *.age file opening as ciphertext.
+do
+  local armed = function()
+    local ok, aus = pcall(vim.api.nvim_get_autocmds, { group = "chezmoi-template.encryption" })
+    return ok and #aus > 0
+  end
+  ct.config.encryption.enabled = false
+  ct._registered = nil
+  pcall(vim.api.nvim_del_augroup_by_name, "chezmoi-template.encryption")
+
+  ct.setup({}) -- plugin/chezmoi-template.lua bootstrap: defaults, encryption off
+  ct.setup({ encryption = { enabled = true } }) -- lazy.nvim opts merge
+  eq("setup after registration still arms encryption", armed(), true)
+
+  local age = SRC .. "/enc_late_arm.age"
+  local f = assert(io.open(age, "wb"))
+  f:write("CIPHERTEXT")
+  f:close()
+  fake["decrypt"] = { code = 0, stdout = "armed late\n" }
+  vim.cmd.edit(vim.fn.fnameescape(age))
+  local lb = vim.api.nvim_get_current_buf()
+  eq("*.age decrypts when opts enabled it", vim.api.nvim_buf_get_lines(lb, 0, -1, false), { "armed late" })
+  vim.api.nvim_buf_delete(lb, { force = true })
+  os.remove(age)
+
+  -- the re-run of _register() recreated what _activate() had torn down: the
+  -- bootstrap triggers and the lazy :Chezmoi stub (which delegates back to
+  -- :Chezmoi and only terminates because _activate() swaps in the real command
+  -- — already activated here, so it would recurse). Restore the activated state
+  -- for the later cases.
+  pcall(vim.api.nvim_del_augroup_by_name, "chezmoi-template.bootstrap")
+  require("chezmoi-template.commands").setup()
+end
+
 -- inject autocmds: BufReadPre seeds real *.tmpl reads; .chezmoitemplates/
 -- partials get forced to gotmpl on BufReadPost
 do
@@ -1338,17 +1375,32 @@ do
   ct.config.inject.exclude = {}
 end
 
--- _register wires encryption up front when it is enabled, rather than leaving it
--- to _activate: an autocmd created while BufReadPre is already dispatching does
--- not run for that read, so the first encrypted file of a session would open as
--- ciphertext. Last in the file — it re-runs registration.
+-- _register wires encryption up front rather than leaving it to _activate: an
+-- autocmd created while BufReadPre is already dispatching does not run for that
+-- read, so the first encrypted file of a session would open as ciphertext. It
+-- registers even with encryption off, because _register runs once while setup()
+-- may run twice and the second call is what usually enables it — the callback
+-- reads the flag itself. Last in the file — it re-runs registration.
 do
   pcall(vim.api.nvim_del_augroup_by_name, "chezmoi-template.encryption")
-  ct.config.encryption.enabled = true
+  ct.config.encryption.enabled = false
   ct._registered = false
   ct._register()
   local ok, autocmds = pcall(vim.api.nvim_get_autocmds, { group = "chezmoi-template.encryption" })
-  eq("_register wires encryption when enabled", ok and #autocmds > 0, true)
+  eq("_register wires encryption regardless of the flag", ok and #autocmds > 0, true)
+
+  -- and with the flag off that registration stays inert: the callback bails
+  -- before touching the buffer, so a managed *.age opens as the raw bytes on disk
+  local off = SRC .. "/enc_disabled.age"
+  local f = assert(io.open(off, "wb"))
+  f:write("CIPHERTEXT")
+  f:close()
+  fake["decrypt"] = { code = 0, stdout = "must not appear\n" }
+  vim.cmd.edit(vim.fn.fnameescape(off))
+  local ob = vim.api.nvim_get_current_buf()
+  eq("*.age opens raw while encryption is disabled", vim.api.nvim_buf_get_lines(ob, 0, -1, false), { "CIPHERTEXT" })
+  vim.api.nvim_buf_delete(ob, { force = true })
+  os.remove(off)
 end
 
 -- flush coverage stats before exit (`nvim -l` may skip luacov's exit hook)
