@@ -186,7 +186,17 @@ local backends = {
           return { text = e.display, file = e.abs }
         end, entries),
         format = function(item)
-          local icon, hl = Snacks.util.icon(vim.fs.basename(item.text), "file")
+          -- A bare basename loses the path context filetype detection needs
+          -- (.ssh/config, git/config both hit vim.filetype's path patterns), so
+          -- resolve the source path to its deploy target the way open buffers
+          -- do; plain files fall back to the name lookup as before.
+          local icon, hl
+          if require("chezmoi-template").config.icons.enabled then
+            icon, hl = require("chezmoi-template.icons").get(item.file)
+          end
+          if not icon then
+            icon, hl = Snacks.util.icon(vim.fs.basename(item.text), "file")
+          end
           return { { icon .. " ", hl }, { item.text } }
         end,
         preview = function(ctx)

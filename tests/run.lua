@@ -1186,6 +1186,11 @@ do
           picked.snacks = o
         end,
       },
+      util = {
+        icon = function(name)
+          return "N:" .. name, "NameHl"
+        end,
+      },
     }
   end
   package.preload["telescope.pickers"] = function()
@@ -1259,6 +1264,13 @@ do
   vim.cmd("Chezmoi pick")
   local sitem = by_display(picked.snacks.items, "text")
   eq("snacks gets display text + abs file", { sitem.text, sitem.file }, { ".pick_me", pick_me })
+  -- entry icons resolve the source path to its deploy target (mini.icons fake
+  -- echoes the name it was asked for), so path-context filetypes (.ssh/config,
+  -- git/config) get their real icon; plain files fall back to the name lookup
+  local chunk = picked.snacks.format(sitem)[1][1]
+  eq("snacks icon resolves to the deploy target", chunk, SRC .. "/.pick_me ")
+  local plain = picked.snacks.format({ text = "run.lua", file = SRC .. "/run.lua" })[1][1]
+  eq("snacks icon falls back for plain files", plain, "N:run.lua ")
 
   ct.config.picker = "telescope"
   vim.cmd("Chezmoi pick")
