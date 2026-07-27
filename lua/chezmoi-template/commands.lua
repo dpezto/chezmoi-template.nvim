@@ -491,10 +491,24 @@ function M.setup()
           return
         end
         vim.schedule(function()
-          if vim.api.nvim_get_current_buf() == ctx.buf then
-            vim.cmd.edit(vim.fn.fnameescape(src))
-            notify("redirected to source " .. vim.fn.fnamemodify(src, ":~"))
+          -- Redirect in whichever window shows the target, not only when it is
+          -- current: pickers/dashboards juggle float focus between this
+          -- buffer's read and the scheduled callback. bufwinid -1 means the
+          -- buffer was loaded in the background (a preview) — leave it alone.
+          local win = vim.fn.bufwinid(ctx.buf)
+          if win == -1 then
+            return
           end
+          vim.api.nvim_win_call(win, function()
+            vim.cmd.edit(vim.fn.fnameescape(src))
+          end)
+          -- Wipe the target buffer so only the source remains: a lingering
+          -- listed target sits in bufferlines one accidental edit away from
+          -- being clobbered on the next apply.
+          if vim.api.nvim_buf_is_valid(ctx.buf) and not vim.bo[ctx.buf].modified then
+            pcall(vim.api.nvim_buf_delete, ctx.buf, {})
+          end
+          notify("redirected to source " .. vim.fn.fnamemodify(src, ":~"))
         end)
       end,
     })

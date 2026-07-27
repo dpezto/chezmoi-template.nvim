@@ -608,6 +608,26 @@ end
 eq("target_path never spawned for source state", spawns["target-path"], tp_spawns)
 eq("target_path outside source dir still resolves", resolve.target_path(SRC .. "/dot_zshrc.tmpl"), SRC .. "/.zshrc")
 
+-- resolve: a source file absent from the managed listing (a source-root
+-- README.md, LICENSE) deploys nowhere, but `target-path` answers for it anyway
+-- (exit 0, $HOME/<name>) — membership in the listing decides. A miss refetches
+-- the listing once so a freshly added file still resolves.
+do
+  fake["managed"] = { code = 0, stdout = SRC .. "/dot_zshrc2.tmpl\n" }
+  resolve.invalidate()
+  local m0 = spawns["managed"] or 0
+  local t0 = spawns["target-path"]
+  eq("target_path nil for undeployed source file", resolve.target_path(SRC .. "/README.md"), nil)
+  eq("undeployed miss refetches the listing once", spawns["managed"], m0 + 2)
+  eq("undeployed file never asks target-path", spawns["target-path"], t0)
+  resolve.target_path(SRC .. "/README.md")
+  eq("undeployed verdict cached (no respawn)", spawns["managed"], m0 + 2)
+
+  fake["target-path"] = { code = 0, stdout = SRC .. "/.zshrc2\n" }
+  eq("listed source file still resolves", resolve.target_path(SRC .. "/dot_zshrc2.tmpl"), SRC .. "/.zshrc2")
+  fake["target-path"] = { code = 0, stdout = SRC .. "/.zshrc\n" }
+end
+
 -- resolve: both source-state entry points degrade quietly when chezmoi is
 -- unavailable — no source dir means nothing can be classified, and there is no
 -- one to ask for warnings
@@ -786,6 +806,20 @@ vim.wait(1000, function()
 end)
 eq("warning reported again after it clears and returns", has_note("run chezmoi init"), true)
 
+-- saving an undeployed repo file (source-root README) neither applies nor errors
+do
+  fake["managed"] = { code = 0, stdout = SRC .. "/dot_zshrc.tmpl\n" }
+  resolve.invalidate()
+  local ub = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(ub, SRC .. "/README.md")
+  clear_notes()
+  local a0 = spawns["apply"]
+  vim.api.nvim_exec_autocmds("BufWritePost", { buffer = ub })
+  vim.wait(300)
+  eq("undeployed repo file save does not apply", spawns["apply"], a0)
+  eq("undeployed repo file save is silent", #notes, 0)
+end
+
 -- notify_on_open fires once per buffer
 clear_notes()
 vim.api.nvim_exec_autocmds("BufReadPost", { buffer = tb })
@@ -897,6 +931,50 @@ do
   end)
   eq("redirect jumps to the chezmoi source", has_note("redirected to source"), true)
   eq("redirect edits the source path", vim.api.nvim_buf_get_name(0):find("dot_chezmoi%-test%-deployed$") ~= nil, true)
+  eq("redirect wipes the target buffer", vim.api.nvim_buf_is_valid(rb), false)
+
+  -- a managed target loaded in the background (picker preview) has no window:
+  -- leave it alone
+  local hidden = vim.fs.normalize(vim.fn.getcwd()) .. "/chezmoi-test-hidden"
+  fake["managed"] = { code = 0, stdout = hidden .. "\n" }
+  resolve.invalidate()
+  local hb = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_buf_set_name(hb, hidden)
+  clear_notes()
+  vim.api.nvim_exec_autocmds("BufReadPost", { buffer = hb })
+  vim.wait(300)
+  eq("background target buffer is not redirected", has_note("redirected to source"), false)
+  eq("background target buffer survives", vim.api.nvim_buf_is_valid(hb), true)
+  vim.api.nvim_buf_delete(hb, { force = true })
+end
+
+-- bootstrap: with redirect on, a deployed managed file activates the plugin
+-- from a cold start — the deployed path never passes is_managed, so without
+-- the managed_set check the first file opened from a dashboard "config"
+-- shortcut would stay on the target
+do
+  ct._registered = false
+  ct._activated = false
+  ct._register()
+  -- unnamed buffers pass through without activating
+  vim.api.nvim_exec_autocmds("BufReadPre", { buffer = vim.api.nvim_create_buf(false, true) })
+  eq("unnamed buffer does not activate", ct._activated, false)
+  local deployed = vim.fs.normalize(vim.fn.getcwd()) .. "/chezmoi-test-cold"
+  fake["managed"] = { code = 0, stdout = deployed .. "\n" }
+  resolve.invalidate()
+  fake["source-path"] = { code = 0, stdout = SRC .. "/dot_chezmoi-test-cold\n" }
+  local cb = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_buf_set_name(cb, deployed)
+  vim.api.nvim_set_current_buf(cb)
+  clear_notes()
+  vim.api.nvim_exec_autocmds("BufReadPre", { buffer = cb })
+  eq("deployed managed file activates the plugin (redirect on)", ct._activated, true)
+  vim.api.nvim_exec_autocmds("BufReadPost", { buffer = cb })
+  vim.wait(1000, function()
+    return has_note("redirected to source")
+  end)
+  eq("cold-start redirect lands on the source", bufname(0):find("dot_chezmoi%-test%-cold$") ~= nil, true)
+  eq("cold-start redirect wipes the target buffer", vim.api.nvim_buf_is_valid(cb), false)
 end
 
 -- :Chezmoi source from a deployed file / from inside the source dir
@@ -1208,6 +1286,8 @@ do
   vim.api.nvim_set_current_buf(fb)
   fake["apply"] = { code = 0, stdout = "" }
   fake["target-path"] = { code = 0, stdout = SRC .. "/.force\n" }
+  fake["managed"] = { code = 0, stdout = SRC .. "/dot_force.tmpl\n" }
+  resolve.invalidate()
   ct.config.apply.force = true
   clear_notes()
   vim.cmd("Chezmoi apply")

@@ -199,8 +199,25 @@ function M._register()
     group = group,
     pattern = "*",
     callback = function(ev)
-      if ev.file ~= "" and require("chezmoi-template.resolve").is_managed(ev.file) then
+      if ev.file == "" then
+        return
+      end
+      local resolve = require("chezmoi-template.resolve")
+      if resolve.is_managed(ev.file) then
         M._activate()
+        -- redirect targets *deployed* files, which live outside the source dir
+        -- and so never pass is_managed — without this the option is dead until
+        -- something else activates the plugin, and the first file opened from a
+        -- dashboard "config" shortcut stays on the target. managed_set is one
+        -- `chezmoi managed` spawn, cached for the session, and only paid when
+        -- redirect is opted in. Activation during BufReadPre registers the
+        -- redirect autocmd in time for this buffer's own BufReadPost (an
+        -- autocmd created mid-event skips that event, not later ones).
+      elseif M.config.redirect then
+        local abs = vim.fs.normalize(vim.fn.fnamemodify(ev.file, ":p"))
+        if resolve.managed_set()[abs] then
+          M._activate()
+        end
       end
     end,
   })
