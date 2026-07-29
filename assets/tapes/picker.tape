@@ -6,19 +6,17 @@
 
 Output assets/picker.gif
 
-Set FontFamily "FiraCode Nerd Font"
-Set FontSize 15
-Set Width 1200
-Set Height 640
-Set Theme "TokyoNight"
-Set Padding 12
+Source assets/tapes/style.tape
 
 Hide
-Type "nvim -i NONE --cmd 'luafile assets/demo/demo-init.lua'" Enter
+# -n (no swapfile): recordings are throwaway, and a stale swap from an earlier
+# session pops an "ignoring swapfile" notification over the shot.
+Type "nvim -i NONE -n --cmd 'luafile assets/demo/demo-init.lua'" Enter
+# No file argument, so there is no buffer text to wait on: hold for the dashboard.
 Sleep 4s
 Show
 Type ":Chezmoi pick"
-Sleep 0.5s
+Sleep 500ms
 Enter
 Sleep 2s
 Type "zsh"

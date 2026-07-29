@@ -6,24 +6,23 @@
 
 Output assets/format.gif
 
-Set FontFamily "FiraCode Nerd Font"
-Set FontSize 15
-Set Width 1200
-Set Height 640
-Set Theme "TokyoNight"
-Set Padding 12
+Source assets/tapes/style.tape
 
 Hide
-Type "nvim -i NONE --cmd 'luafile assets/demo/demo-init.lua' ~/.cache/chezmoi-template-demo/src/dot_zshrc.tmpl" Enter
+# -n (no swapfile): recordings are throwaway, and a stale swap from an earlier
+# session pops an "ignoring swapfile" notification over the shot.
+Type "nvim -i NONE -n --cmd 'luafile assets/demo/demo-init.lua' ~/.cache/chezmoi-template-demo/src/dot_zshrc.tmpl" Enter
 Sleep 6s
 Show
 Sleep 1.5s
 # mangle: flatten every line to column 0
-Type ":%left" Enter
+Type ":%left"
+Sleep 1.25s
+Enter
 Sleep 2s
 # format: shell re-indents, template directives re-pair + depth-pad
 Type ":lua require('conform').format()"
-Sleep 0.5s
+Sleep 1.25s
 Enter
 Sleep 3s
 Hide

@@ -11,50 +11,58 @@
 
 Output assets/injection.gif
 
-Set FontFamily "FiraCode Nerd Font"
-Set FontSize 15
-Set Width 1200
-Set Height 640
-Set Theme "TokyoNight"
-Set Padding 12
+Source assets/tapes/style.tape
 
 Hide
-Type "nvim -i NONE --cmd 'luafile assets/demo/demo-init.lua' --cmd 'lua vim.g.loaded_chezmoi_template=1' ~/.cache/chezmoi-template-demo/src/dot_zshrc.tmpl" Enter
+# -n (no swapfile): recordings are throwaway, and a stale swap from an earlier
+# session pops an "ignoring swapfile" notification over the shot.
+# Stage 4 also re-reads the buffer with :edit, which would trip W325 on this
+# session's own swapfile.
+Type "nvim -i NONE -n --cmd 'luafile assets/demo/demo-init.lua' --cmd 'lua vim.g.loaded_chezmoi_template=1' ~/.cache/chezmoi-template-demo/src/dot_zshrc.tmpl" Enter
 # treesitter-context throws on manual start/stop; disable it (pcall -> no-op if absent).
 # Keep diagnostics ON but drop inline virtual_text: the lualine count still shows the
 # LSP errors (the point in the ft=zsh stages), without spamming the buffer.
 Type ":lua pcall(function() require('treesitter-context').disable() end)" Enter
 Type ":lua pcall(vim.diagnostic.config, { virtual_text = false })" Enter
+# NOINJ strips the plugin's injection back to a no-op: a lazy.nvim spec passing
+# `opts` calls setup() itself, so the load guard alone does not keep the first
+# three stages plugin-free, and the directive also infers the language from the
+# file name when nothing is seeded — only replacing it stops the injection.
+Type ":lua NOINJ=function() vim.treesitter.query.add_directive('inject-chezmoi!', function() end, { force = true }) end" Enter
 # Define the four states. Winbar labels each; the short S1..S4 calls read clearly.
-Type ":lua S1=function() vim.cmd('set filetype=zsh'); pcall(vim.treesitter.stop,0); vim.wo.winbar='%=  ✗ no plugin — zsh regex, no treesitter  %=' end" Enter
+Type ":lua S1=function() NOINJ(); vim.cmd('set filetype=zsh'); pcall(vim.treesitter.stop,0); vim.wo.winbar='%=  ✗ regex  %=' end" Enter
 # no explicit vim.treesitter.start: the FileType autocmd auto-starts it, and a
 # second start() makes the decoration provider error out (all-white buffer)
-Type ":lua S2=function() pcall(vim.treesitter.stop,0); vim.cmd('set filetype=gotmpl'); vim.wo.winbar='%=  ✗ no plugin — gotmpl treesitter (template only)  %=' end" Enter
-Type ":lua S3=function() pcall(vim.treesitter.stop,0); vim.cmd('set filetype=zsh'); vim.wo.winbar='%=  ✗ no plugin — zsh treesitter (shell only)  %=' end" Enter
-Type ":lua S4=function() require('chezmoi-template').setup(); vim.cmd('edit'); vim.wo.winbar='%=  ✓ chezmoi-template.nvim — gotmpl + zsh injection  %=' end" Enter
-# Stage 1 set up while hidden; small pause lets the zsh LSP attach and publish before Show.
+Type ":lua S2=function() NOINJ(); pcall(vim.treesitter.stop,0); vim.cmd('set filetype=gotmpl'); vim.wo.winbar='%=  ✗ gotmpl treesitter (template only)  %=' end" Enter
+Type ":lua S3=function() NOINJ(); pcall(vim.treesitter.stop,0); vim.cmd('set filetype=zsh'); vim.wo.winbar='%=  ✗ zsh treesitter (shell only)  %=' end" Enter
+Type ":lua S4=function() require('chezmoi-template.inject').register_directive(); require('chezmoi-template').setup(); vim.cmd('edit'); vim.wo.winbar='%=  ✓ chezmoi-template.nvim  %=' end" Enter
+# Stage 1 set up while hidden; Wait on winbar text (no regex metacharacters).
 Type ":lua S1()" Enter
+Wait+Screen /regex/
 Show
 # vhs compresses static holds ~0.4x, so these sleeps are ~2.5x the on-screen time.
-Sleep 10s
+Sleep 5s
 
 # Stage 2 — gotmpl treesitter only: template structure colored, shell body plain.
 Hide
 Type ":lua S2()" Enter
+Wait+Screen /template only/
 Show
-Sleep 10s
+Sleep 5s
 
 # Stage 3 — zsh treesitter only: shell colored by treesitter, {{ }} mangled, LSP errors.
 Hide
 Type ":lua S3()" Enter
+Wait+Screen /shell only/
 Show
-Sleep 10s
+Sleep 5s
 
 # Stage 4 — plugin on: gotmpl + injected zsh, both correct, diagnostics clear.
 Hide
 Type ":lua S4()" Enter
+Wait+Screen /chezmoi-template.nvim/
 Show
-Sleep 11s
+Sleep 7.5s
 
 Hide
 Type ":qa!" Enter

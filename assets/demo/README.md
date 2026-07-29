@@ -56,7 +56,13 @@ custom variable renders and shows up in completion.
   components survive sidekick being off. Harmless no-op for configs that don't
   use either.
 - **`injection.tape`** additionally sets the plugin's load guard
-  (`vim.g.loaded_chezmoi_template=1`) so nothing auto-runs `setup()`. It then
+  (`vim.g.loaded_chezmoi_template=1`) so the `plugin/` bootstrap does not run
+  `setup()`. The guard is not enough on its own: a lazy.nvim spec that passes
+  `opts` calls `setup()` when the plugin loads, and the injection directive
+  infers the target language from the file name even with nothing seeded. So the
+  tape re-registers `inject-chezmoi!` as a no-op before each of the first three
+  stages and restores the real one for the fourth. Without that, all four stages
+  show the injected result and the comparison is meaningless. It then
   walks four highlighting setups in one window, each labelled in the winbar:
   (1) zsh regex, no treesitter — shell colors but `{{ }}` mangled, LSP errors;
   (2) gotmpl treesitter only — template structure colored, shell body plain;
