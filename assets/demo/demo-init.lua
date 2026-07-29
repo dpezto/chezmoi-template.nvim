@@ -9,6 +9,12 @@ vim.g.chezmoi_demo = 1
 -- replaces it (both use force=true) once setup() runs.
 vim.treesitter.query.add_directive("inject-chezmoi!", function() end, { force = true })
 
+-- The load guard only stops the plugin/ bootstrap: a lazy.nvim spec that passes
+-- `opts` calls setup() itself, which registers the real directive anyway. So the
+-- guard alone cannot give the injection tape a plugin-free buffer — the tape
+-- re-registers this no-op before each of its first three stages and restores the
+-- real directive for the fourth.
+
 -- sidekick.nvim is disabled during recordings (its spec reads chezmoi_demo),
 -- but LazyVim's sidekick extra still inserts lualine components that
 -- require("sidekick.status") — stub it so lualine loads cleanly.
