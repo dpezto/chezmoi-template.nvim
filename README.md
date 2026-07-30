@@ -2,32 +2,37 @@
 
 [![CI](https://github.com/dpezto/chezmoi-template.nvim/actions/workflows/ci.yml/badge.svg)](https://github.com/dpezto/chezmoi-template.nvim/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/dpezto/chezmoi-template.nvim/branch/main/graph/badge.svg)](https://codecov.io/gh/dpezto/chezmoi-template.nvim)
+[![Release](https://img.shields.io/github/v/release/dpezto/chezmoi-template.nvim)](https://github.com/dpezto/chezmoi-template.nvim/releases)
+[![Neovim](https://img.shields.io/badge/Neovim-%E2%89%A5%200.10-57A143?logo=neovim)](https://neovim.io)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Edit your [chezmoi](https://chezmoi.io) source files **natively** — and make Neovim understand them.
 
 Most chezmoi integrations wrap the `chezmoi edit` CLI: temporary buffers, watchers, apply-on-save. This plugin takes the opposite approach: you open the real source files (in `~/.local/share/chezmoi`, under git, with your normal workflow), and the editor becomes chezmoi-aware:
 
+![Editing dot_zshrc.tmpl: Go-template and zsh highlighting simultaneously](assets/injection.gif)
+
 <!--toc:start-->
 
-- [chezmoi-template.nvim](#chezmoi-templatenvim)
-  - [Requirements](#requirements)
-  - [Installation](#installation)
-  - [Configuration](#configuration)
-    - [Formatting](#formatting)
-    - [Icons](#icons)
-    - [Encryption](#encryption)
-  - [Completion](#completion)
-  - [Picker](#picker)
-  - [Lua API](#lua-api)
-  - [Secrets](#secrets)
-  - [vs. chezmoi.nvim / chezmoi.vim / the LazyVim extra](#vs-chezmoinvim-chezmoivim-the-lazyvim-extra)
-  - [Health](#health)
-  - [Development](#development)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Configuration](#configuration)
+  - [Formatting](#formatting)
+  - [Icons](#icons)
+  - [Encryption](#encryption)
+- [Completion](#completion)
+- [Picker](#picker)
+- [Lua API](#lua-api)
+- [Secrets](#secrets)
+- [vs. chezmoi.nvim / chezmoi.vim / the LazyVim extra](#vs-chezmoinvim-chezmoivim-the-lazyvim-extra)
+- [Non-goals](#non-goals)
+- [Health](#health)
+- [Development](#development)
+- [Documentation](#documentation)
+- [Credits](#credits)
+- [License](#license)
 
 <!--toc:end-->
-
-![Editing dot_zshrc.tmpl: Go-template and zsh highlighting simultaneously](assets/injection.gif)
 
 - **Real highlighting inside templates.** A `dot_zshrc.tmpl` is a `gotmpl` buffer whose text is treesitter-injected as **zsh** — Go-template syntax _and_ target-language syntax, simultaneously. Works for any target language with a treesitter parser, resolved via `chezmoi target-path`. Includes `.chezmoitemplates/` partials, `.chezmoiignore` / `.chezmoiremove` / `.chezmoiexternal.*`.
 - **Format templates as their target filetype** ([conform.nvim](https://github.com/stevearc/conform.nvim)). Go-template spans are masked with structurally inert placeholders, the buffer is formatted with the target filetype's formatter (shfmt, biome, taplo, …), then the spans are restored — with `{{ end }}` / `{{ else }}` re-indented to pair with their opener, and column-0 `{{-` directive blocks getting depth-encoding interior padding:
@@ -43,7 +48,12 @@ Most chezmoi integrations wrap the `chezmoi edit` CLI: temporary buffers, watche
 
   ![Formatting a template as its target filetype](assets/format.gif)
 
+  <details>
+  <summary>Caveat: lines with no valid placeholder form</summary>
+
   A few template shapes have no placeholder form the target syntax accepts — a template glued to a bare word (`k = {{ .x }}suffix`), or a control-flow pair wrapping a whole entry (`{{ if .on }}k = 1{{ end }}`). Those lines are masked whole instead, so they come back untouched while the rest of the file still formats.
+
+  </details>
 
 - **Target-aware icons** ([mini.icons](https://github.com/nvim-mini/mini.icons)). `private_dot_config/ghostty/config.tmpl` shows the ghostty icon, not a generic template glyph. Any combination of chezmoi source-state attributes (`private_`, `encrypted_`, `exact_`, `dot_`, `.tmpl`, `.age`, …) resolves to the deployed name.
 - **Transparent encryption** (opt-in). chezmoi-managed `*.age` files decrypt on open and re-encrypt on save via `chezmoi decrypt` / `chezmoi encrypt` — whatever your chezmoi config uses (age, rage, builtin age, even gpg) just works. `encrypted_*.tmpl.age` still gets full template + target highlighting.
@@ -112,7 +122,17 @@ add `version = "*"` to the spec to pin to stable releases.
 
 ## Configuration
 
-Defaults:
+Most setups need little or nothing:
+
+```lua
+opts = {
+  apply = { force = true },          -- skip chezmoi's prompt on modified targets
+  encryption = { enabled = true },   -- transparent *.age editing
+}
+```
+
+<details>
+<summary>All options with defaults</summary>
 
 ```lua
 require("chezmoi-template").setup({
@@ -156,9 +176,14 @@ require("chezmoi-template").setup({
 })
 ```
 
+</details>
+
 ### Formatting
 
 The formatter is registered with conform as `chezmoi`, and `formatters_by_ft.gotmpl = { "chezmoi" }` is set if you haven't set it yourself. It formats using the **target filetype's** formatter, so that formatter must be installed and configured in conform as usual.
+
+<details>
+<summary>Formatting decrypted *.age buffers</summary>
 
 If you use the encryption module and format decrypted `*.age` buffers, route them through the `chezmoi` formatter too (it strips the `.age` suffix before handing the file to the underlying formatter):
 
@@ -172,6 +197,8 @@ for ft, formatters in pairs(opts.formatters_by_ft) do
   end
 end
 ```
+
+</details>
 
 ### Icons
 
@@ -271,12 +298,17 @@ What you should know:
 - [cloak.nvim](https://github.com/laytan/cloak.nvim) composes well for masking secrets in decrypted buffers — its `file_pattern`s match the buffer name, which keeps its encrypted suffix: add `"*.age"`/`"*.asc"` (or specific names like `"*.json.age"`) to your cloak patterns.
 - [ecolog.nvim](https://github.com/philosofonusus/ecolog.nvim) env completion works inside templates by mirroring its providers onto the `gotmpl` filetype; its shelter mode then masks env values in completion/peek as usual:
 
+  <details>
+  <summary>ecolog provider snippet</summary>
+
   ```lua
   -- ecolog opts.providers: reuse shell providers for gotmpl buffers
   providers = vim.tbl_map(function(p)
     return vim.tbl_extend("force", p, { filetype = "gotmpl" })
   end, shell_providers),
   ```
+
+  </details>
 
 ## vs. chezmoi.nvim / chezmoi.vim / the LazyVim extra
 
@@ -292,6 +324,15 @@ What you should know:
 | Apply                 | apply-on-save via `chezmoi edit --watch`    | `:Chezmoi apply` + apply-on-save (default)                 |
 | Picker                | telescope/fzf/snacks picker                 | `:Chezmoi pick` — snacks/telescope/fzf-lua/mini.pick/select |
 
+## Non-goals
+
+Things this plugin deliberately does not do:
+
+- No `chezmoi edit --watch` wrapper. The editing model is native source files; apply-on-save covers the same ground.
+- No `chezmoi add` wrapper. Adding files to chezmoi is a one-off CLI action.
+- No script running. `run_` scripts execute on `chezmoi apply`, never from the editor.
+- No nvim-cmp or coc completion source. Completion targets blink.cmp only.
+
 ## Health
 
 `:checkhealth chezmoi-template` verifies the chezmoi binary, gotmpl parser, conform, and the encryption setup.
@@ -303,3 +344,18 @@ What you should know:
 `make smoke` exercises the plugin against a throwaway chezmoi setup deliberately unlike the author's — custom `sourceDir`/`destDir`, gpg encryption, and a run with no chezmoi config at all. Needs `chezmoi` (and optionally `gpg`) on `$PATH`; it never touches your real chezmoi state.
 
 See [CONTRIBUTING](.github/CONTRIBUTING.md) for commit conventions and the AI-assistance policy.
+
+## Documentation
+
+`:h chezmoi-template` covers everything here in vimdoc form ([doc/chezmoi-template.txt](doc/chezmoi-template.txt)). Release history lives in the [CHANGELOG](CHANGELOG.md).
+
+## Credits
+
+- [chezmoi.nvim](https://github.com/xvzc/chezmoi.nvim) and [chezmoi.vim](https://github.com/alker0/chezmoi.vim), the prior art this plugin positions itself against.
+- [conform.nvim](https://github.com/stevearc/conform.nvim) for the formatting pipeline.
+- [blink.cmp](https://github.com/Saghen/blink.cmp) for the completion engine.
+- [mini.icons](https://github.com/nvim-mini/mini.icons) for icon resolution.
+
+## License
+
+[MIT](LICENSE)

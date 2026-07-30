@@ -11,7 +11,10 @@ CONTENTS                                            *chezmoi-template-contents*
   3. Options .............................. |chezmoi-template-options|
   4. Commands ............................. |chezmoi-template-commands|
   5. Completion ........................... |chezmoi-template-completion|
-  6. Health ............................... |chezmoi-template-health|
+  6. Picker ............................... |chezmoi-template-picker|
+  7. Lua API .............................. |chezmoi-template-api|
+  8. Secrets .............................. |chezmoi-template-secrets|
+  9. Health ............................... |chezmoi-template-health|
 
 ==============================================================================
 1. INTRODUCTION                                 *chezmoi-template-introduction*
@@ -72,7 +75,11 @@ Defaults: >lua
 
   require("chezmoi-template").setup({
     source_dir = nil,            -- nil = auto via `chezmoi source-path`
-    inject = { enabled = true }, -- treesitter target-language injection
+    inject = {
+      enabled = true,            -- treesitter target-language injection
+      exclude = {},              -- lua patterns (matched on the normalized
+                                 -- "/" path) to leave as plain gotmpl
+    },
     format = {
       enabled = true,            -- conform formatter registration
       indent_directives = true,  -- depth-pad column-0 {{- directive blocks
@@ -83,6 +90,15 @@ Defaults: >lua
                                  -- chezmoi's own source state (see below)
                                  -- reports warnings instead
       notify = true,             -- notify on successful applies
+      force = false,             -- pass --force (skip chezmoi's prompt on
+                                 -- externally-modified targets)
+    },
+    preview = {
+      live = true,               -- re-render as you type (false = on write)
+      debounce = 150,            -- ms of idle before a live re-render
+      slow_ms = 500,             -- renders slower than this pause live
+                                 -- preview to on-write; 0 disables
+      split = "vertical",        -- "vertical"|"horizontal" preview window
     },
     notify_on_open = false,      -- notify when opening a managed source file
     redirect = false,            -- deployed file open -> jump to source
@@ -91,14 +107,23 @@ Defaults: >lua
       -- hide values of matching data keys in completion docs
       mask = { "secret", "token", "passw", "key", "api" },
     },
-    picker = nil,                -- "snacks"|"telescope"|"fzf-lua"|"mini"|
+    picker = {
+      backend = nil,             -- "snacks"|"telescope"|"fzf-lua"|"mini"|
                                  -- "select"; nil = auto-detect
+      display = "target",        -- entry labels: "target" (.zshrc) or
+                                 -- "source" (dot_zshrc.tmpl)
+      exclude = {},              -- lua patterns (vs the source-relative
+                                 -- path) hidden on top of the built-in
+                                 -- internals list; false = show everything
+    },
     encryption = {
       enabled = false,           -- opt-in; delegates to chezmoi decrypt/encrypt
       exclude = {},              -- lua patterns of *.age paths to skip
     },
   })
 <
+A plain string `picker = "telescope"` is shorthand for
+`picker = { backend = "telescope" }`.
                                             *chezmoi-template-indent-directives*
 format.indent_directives rewrites the interior padding of column-0 `{{-`
 whole-line directives so template nesting depth reads as indentation
@@ -158,10 +183,22 @@ encryption.exclude lua patterns leave matching paths as plain binary.
 :Chezmoi source       From a deployed managed file, jump to its chezmoi
                       source. (Set redirect = true to do this automatically.)
 
+                                                              *:Chezmoi-edit*
+:Chezmoi edit {target}
+                      Open the chezmoi source for any deploy target
+                      ({target} tab-completes over deployed paths).
+
                                                            *:Chezmoi-preview*
-:Chezmoi preview      Toggle a vertical split with the rendered template
+:Chezmoi preview      Toggle a split with the rendered template
                       (`chezmoi execute-template`), typed as the target
-                      filetype and re-rendered on every write. The preview
+                      filetype. By default the preview re-renders live as you
+                      type (debounced by preview.debounce ms); with
+                      preview.live = false it re-renders on write only, and
+                      renders slower than preview.slow_ms pause live preview
+                      to on-write. Invalid template syntax keeps the last
+                      valid render, flagged stale in the winbar, until it
+                      parses again. The split is vertical by default
+                      (preview.split = "horizontal" to change). The preview
                       buffer is named chezmoi-preview://<target> (a
                       dot_zshrc.tmpl previews as .zshrc); `q` (or
                       running the command again) closes it. Refuses
@@ -170,10 +207,11 @@ encryption.exclude lua patterns leave matching paths as plain binary.
 
                                                               *:Chezmoi-pick*
 :Chezmoi pick         File picker over the source directory. Backend from
-                      the picker option; auto-detects loaded pickers
+                      picker.backend; auto-detects loaded pickers
                       (snacks > telescope > fzf-lua > mini.pick), falling
                       back to |vim.ui.select()|. Lazy-loaded pickers may not
-                      be detected — set the option explicitly.
+                      be detected — set the option explicitly. See
+                      |chezmoi-template-picker|.
 
 ==============================================================================
 5. COMPLETION                                     *chezmoi-template-completion*
@@ -196,7 +234,77 @@ ifelse, range, rangekv, with, define, block, comment) expanding to full
   }
 <
 ==============================================================================
-6. HEALTH                                             *chezmoi-template-health*
+6. PICKER                                             *chezmoi-template-picker*
+
+:Chezmoi pick opens a file picker over the source directory. Entries are
+built by the plugin (via `git ls-files`, so the source repo's .gitignore is
+respected; a plain fs walk for non-git source dirs), identically across
+backends:
+
+- Labels show the deployed target name (dot_zshrc.tmpl -> .zshrc); set
+  picker.display = "source" for raw source names.
+- Chezmoi internals are hidden by default (.git/, .chezmoi.$FORMAT.tmpl,
+  .chezmoiversion, .chezmoiroot, .chezmoidata.*) while editable specials stay
+  listed (.chezmoiignore, .chezmoiscripts/, .chezmoitemplates/,
+  .chezmoiexternal.*). picker.exclude hides additional lua patterns (matched
+  against the source-relative path) on top of that list; exclude = false
+  shows everything.
+- Previews highlight the target language inside the template, same as opening
+  the file. Managed encrypted files (*.age, *.asc) preview decrypted when
+  encryption.enabled is on, typed as their deployed target.
+
+==============================================================================
+7. LUA API                                               *chezmoi-template-api*
+
+For statuslines, custom pickers, or scripts.
+
+list()                                            *chezmoi-template.list()*
+    Every managed file as a list of { source = <abs>, target = <abs> }
+    pairs: >lua
+      local files = require("chezmoi-template").list()
+<
+edit({target})                                    *chezmoi-template.edit()*
+    Open the chezmoi source for a deploy target (`~` is expanded); the
+    programmatic form of :Chezmoi edit: >lua
+      require("chezmoi-template").edit("~/.zshrc")
+<
+icons.attach()                            *chezmoi-template.icons.attach()*
+    Wrap MiniIcons.get() so chezmoi source names resolve to their deployed
+    targets. Runs automatically; call it explicitly from a lazy-loaded
+    mini.icons `config` if icons don't resolve: >lua
+      require("chezmoi-template.icons").attach()
+<
+icons.get({path})                            *chezmoi-template.icons.get()*
+    Return the target's `glyph, hl` for a chezmoi source path, or nil for
+    non-chezmoi paths. For statusline/bufferline components: >lua
+      local icon, hl =
+        require("chezmoi-template.icons").get(vim.api.nvim_buf_get_name(0))
+<
+==============================================================================
+8. SECRETS                                           *chezmoi-template-secrets*
+
+What the plugin does by itself:
+
+- Decrypted buffers never persist plaintext: 'swapfile' and 'undofile' are
+  disabled, and writes go straight through `chezmoi encrypt` (no plaintext
+  temp file).
+- Completion docs hide values of data keys matching completion.mask
+  (default: secret, token, passw, key, api) — the key still completes, the
+  value shows masked.
+
+What to know:
+
+- :Chezmoi preview and diagnostics run `chezmoi execute-template` on the
+  buffer — templates calling secret managers (onepassword, vault, pass, …)
+  render real secrets into the preview split, and may be slow or fail
+  without auth. Don't screen-share the preview of a secrets template.
+- cloak.nvim composes well for masking secrets in decrypted buffers — its
+  file_patterns match the buffer name, which keeps its encrypted suffix:
+  add "*.age"/"*.asc" (or specific names like "*.json.age") to the cloak
+  patterns.
+
+==============================================================================
+9. HEALTH                                             *chezmoi-template-health*
 
 `:checkhealth chezmoi-template` verifies the chezmoi binary, the gotmpl
 treesitter parser, conform.nvim, and the encryption setup.
