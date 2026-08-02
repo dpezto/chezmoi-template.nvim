@@ -101,7 +101,7 @@ Defaults: >lua
       slow_ms = 500,             -- renders slower than this pause live
                                  -- preview to on-write; 0 disables
       split = "vertical",        -- "vertical"|"horizontal" preview window
-      diff = false,              -- diff the render against the deployed file
+      diff = false,              -- mark the render against the deployed file
     },
     notify_on_open = false,      -- notify when opening a managed source file
     redirect = false,            -- deployed file open -> jump to source
@@ -218,16 +218,19 @@ encryption.exclude lua patterns leave matching paths as plain binary.
                       non-template buffers. NOTE: templates calling secret
                       managers render real secrets here.
 
-                      With preview.diff, a third pane holds the deployed file
-                      and the two are put in diff mode, so the render reads as
-                      what this edit will change out there rather than only
-                      what it renders to. The panes sit side by side whatever
-                      preview.split says, labelled "deployed" and "will deploy"
-                      in their winbars, and the deployed side is re-read on
-                      every render so an apply landing underneath shows up.
-                      `q` from either pane closes both. A template with no
-                      deploy target (`.chezmoitemplates/`, an unapplied file)
-                      previews without the extra pane.
+                      With preview.diff the render is marked up against the
+                      file currently deployed, in the preview buffer itself:
+                      added and changed lines take a |hl-DiffAdd| highlight,
+                      and lines the edit removes come back as |hl-DiffDelete|
+                      virtual lines. Still one window. The deployed file is
+                      re-read on every render, so an apply landing underneath
+                      shows up. A template with no deploy target
+                      (`.chezmoitemplates/`, an unapplied file) previews
+                      unmarked.
+
+                      The winbar reports anything a reader would otherwise
+                      mistake for normal: the render being stale, live updates
+                      being paused, and what the marks compare against.
 
                       Writing a file under `.chezmoitemplates/` also re-renders
                       every open preview, so a source that is a bare

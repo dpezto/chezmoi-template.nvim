@@ -74,16 +74,54 @@ local function deployed_lines(target)
   return vim.fn.readfile(target)
 end
 
+local diff_ns = vim.api.nvim_create_namespace("chezmoi-template.preview-diff")
+
+-- Mark up the preview against what is deployed, in the preview buffer itself.
+-- Neovim's diff engine needs a second window holding a second buffer, and
+-- keeping that buffer in step meant rewriting it on every render — a re-diff
+-- and a redraw of two windows per keystroke. vim.diff gives the same hunks
+-- with no window at all: added and changed lines take a DiffAdd line
+-- highlight, and deleted lines come back as DiffDelete virtual lines, so the
+-- render alone shows what the edit changes out there.
+local function mark_diff(dest, target, want)
+  vim.api.nvim_buf_clear_namespace(dest, diff_ns, 0, -1)
+  local have = deployed_lines(target)
+  local last = vim.api.nvim_buf_line_count(dest) - 1
+  -- vim.diff wants trailing newlines or it reports a phantom last-line change
+  local hunks =
+    vim.diff(table.concat(have, "\n") .. "\n", table.concat(want, "\n") .. "\n", { result_type = "indices" })
+  for _, h in ipairs(hunks) do
+    local start_a, count_a, start_b, count_b = h[1], h[2], h[3], h[4]
+    for row = start_b - 1, start_b + count_b - 2 do
+      if row >= 0 and row <= last then
+        vim.api.nvim_buf_set_extmark(dest, diff_ns, row, 0, { line_hl_group = "DiffAdd" })
+      end
+    end
+    if count_a > 0 then
+      local virt = {}
+      for i = start_a, start_a + count_a - 1 do
+        virt[#virt + 1] = { { have[i] or "", "DiffDelete" } }
+      end
+      -- count_b == 0 is a pure deletion: start_b is the line it sat after, so
+      -- the removed lines hang below it (or above line 1 when start_b is 0).
+      local above = count_b > 0 or start_b == 0
+      local row = math.min(math.max(start_b - 1, 0), math.max(last, 0))
+      if last >= 0 then
+        vim.api.nvim_buf_set_extmark(dest, diff_ns, row, 0, { virt_lines = virt, virt_lines_above = above })
+      end
+    end
+  end
+end
+
 -- :Chezmoi preview — render the current template via execute-template into a
 -- vsplit typed as the target filetype; re-renders live as you type (or on write
 -- when preview.live is false). Running it again closes the preview.
--- With preview.diff, a second pane holds the deployed file and the two are put
--- in diff mode, so the render reads as "what this edit will change out there"
--- rather than just "what this renders to". Neovim's diff engine sees the
--- rendered text directly, which is the one comparison git tooling cannot make:
--- the deployed state is not in any repository.
--- state: src buf -> { dest, deployed, target, timer, tick, rendering, pending,
---                     live, slow_ms, last_output, stale }
+-- With preview.diff the render is marked up against the deployed file in place,
+-- so it reads as "what this edit will change out there" rather than just "what
+-- this renders to" — the one comparison git tooling cannot make, since the
+-- deployed state is in no repository.
+-- state: src buf -> { dest, diff, target, winbar, timer, tick, rendering,
+--                     pending, live, slow_ms, last_output, stale }
 local preview_state = {}
 
 -- Freeing a preview's window handle + debounce timer, from either the toggle-off
@@ -95,17 +133,33 @@ local function preview_teardown(src)
     st.timer:close()
     st.timer = nil
   end
-  -- The deployed pane exists only to be diffed against the render; on its own
-  -- it is a copy of a file the user can just open.
-  if st and st.deployed and vim.api.nvim_buf_is_valid(st.deployed) then
-    vim.api.nvim_buf_delete(st.deployed, { force = true })
-  end
   preview_state[src] = nil
 end
 
--- Flip the stale marker on the preview window's winbar. Shown when the template
--- fails to render so the frozen last-valid output doesn't read as current. Only
--- touches the window when the state actually changes.
+-- The preview's winbar: whatever the pane is called, plus any state a reader
+-- would otherwise mistake for normal. Both markers describe a condition that
+-- holds until something changes it, so they live here rather than in a
+-- notification that scrolls away seconds after the fact.
+local function refresh_winbar(st, dest)
+  local win = vim.fn.bufwinid(dest)
+  if win == -1 then
+    return
+  end
+  local parts = {}
+  if st and st.stale then
+    parts[#parts + 1] = "%#WarningMsg#⚠ stale (invalid template)%*"
+  end
+  if st and st.paused then
+    parts[#parts + 1] = "%#WarningMsg#⏸ updates on write%*"
+  end
+  if st and st.winbar ~= "" then
+    parts[#parts + 1] = st.winbar
+  end
+  vim.wo[win].winbar = table.concat(parts, "  ")
+end
+
+-- Flip the stale marker. Set when the template fails to render, so the frozen
+-- last-valid output doesn't read as current.
 local function set_stale(st, dest, stale)
   if st and st.stale == stale then
     return
@@ -113,27 +167,24 @@ local function set_stale(st, dest, stale)
   if st then
     st.stale = stale
   end
-  local win = vim.fn.bufwinid(dest)
-  if win ~= -1 then
-    -- Restore whatever the pane said before, not "": in diff mode the winbar
-    -- is what tells the two sides apart.
-    vim.wo[win].winbar = stale and "%#WarningMsg#⚠ preview stale (invalid template)%*" or (st and st.winbar or "")
-  end
+  refresh_winbar(st, dest)
 end
 
 -- Live re-rendering runs the whole template on every idle window; a template
 -- calling secret managers or the network can be slow. If a render blows past
 -- slow_ms, drop this preview to on-write so leaving it on can't hammer them.
-local function maybe_backoff(st, ms)
+local function maybe_backoff(st, dest, ms)
   if not st or not st.live or st.slow_ms <= 0 or ms <= st.slow_ms then
     return
   end
   st.live = false
+  st.paused = true
   if st.timer then
     st.timer:stop()
     st.timer:close()
     st.timer = nil
   end
+  refresh_winbar(st, dest)
   notify(string.format("live preview paused (slow template, %dms) — updates on write", ms), vim.log.levels.WARN)
 end
 
@@ -152,7 +203,7 @@ local function preview_render(src, dest)
         -- Only back off if this is still the active preview (not one torn down
         -- while its render was in flight).
         if preview_state[src] == st then
-          maybe_backoff(st, (uv.hrtime() - t0) / 1e6)
+          maybe_backoff(st, dest, (uv.hrtime() - t0) / 1e6)
         end
       end
       if not vim.api.nvim_buf_is_valid(dest) then
@@ -173,15 +224,13 @@ local function preview_render(src, dest)
             st.last_output = ret.stdout
           end
         end
-        -- Re-read the deployed side every render: apply-on-save rewrites that
-        -- file underneath the preview, and a diff against a stale copy reports
-        -- changes that have already landed.
-        -- ponytail: one small readfile per render; cache on mtime if it ever
-        -- shows up next to the execute-template spawn it rides along with.
-        if st and st.deployed and vim.api.nvim_buf_is_valid(st.deployed) then
-          vim.bo[st.deployed].modifiable = true
-          vim.api.nvim_buf_set_lines(st.deployed, 0, -1, false, deployed_lines(st.target))
-          vim.bo[st.deployed].modifiable = false
+        -- Re-mark every render, even when the output is unchanged: apply-on-save
+        -- rewrites the deployed file underneath the preview, and marks against a
+        -- stale copy report changes that have already landed.
+        -- ponytail: one small readfile per render, riding along with the
+        -- execute-template spawn; cache on mtime if it ever shows up.
+        if st and st.diff then
+          mark_diff(dest, st.target, vim.api.nvim_buf_get_lines(dest, 0, -1, false))
         end
         set_stale(st, dest, false)
       else
@@ -254,25 +303,6 @@ local function preview_toggle(want_diff)
   local src_win = vim.api.nvim_get_current_win()
 
   vim.cmd((cfg.split == "horizontal" and "" or "vertical ") .. "botright new")
-  local deployed
-  if diff then
-    deployed = vim.api.nvim_get_current_buf()
-    vim.bo[deployed].buftype = "nofile"
-    vim.bo[deployed].bufhidden = "wipe"
-    vim.bo[deployed].swapfile = false
-    vim.api.nvim_buf_set_lines(deployed, 0, -1, false, deployed_lines(target))
-    vim.bo[deployed].modifiable = false
-    if target_ft and target_ft ~= "gotmpl" then
-      vim.bo[deployed].filetype = target_ft
-    end
-    -- pcall: a second preview of the same target would E95 on the name collision
-    pcall(vim.api.nvim_buf_set_name, deployed, "chezmoi-deployed://" .. target)
-    vim.wo.winbar = "deployed  " .. vim.fn.fnamemodify(target, ":~")
-    -- Side by side whatever preview.split says: a diff read top to bottom is
-    -- not a diff anyone reads.
-    vim.cmd("vertical rightbelow new")
-  end
-
   local dest = vim.api.nvim_get_current_buf()
   vim.bo[dest].buftype = "nofile"
   vim.bo[dest].bufhidden = "wipe"
@@ -287,36 +317,14 @@ local function preview_toggle(want_diff)
     vim.bo[dest].filetype = target_ft
   end
   map_close(dest)
-  local base_winbar = ""
-  if diff then
-    base_winbar = "will deploy  " .. vim.fn.fnamemodify(target, ":~")
-    vim.wo.winbar = base_winbar
-    vim.api.nvim_win_call(vim.fn.bufwinid(deployed), function()
-      vim.cmd("diffthis")
-    end)
-    vim.cmd("diffthis")
-    map_close(deployed)
-    -- However the deployed pane goes away (`q`, :q, a window close wiping it),
-    -- the render goes with it: left alone it is a copy of a file the user could
-    -- have opened, still stuck in diff mode against nothing.
-    vim.api.nvim_create_autocmd("BufWipeout", {
-      group = "chezmoi-template.commands",
-      buffer = deployed,
-      callback = function()
-        if vim.api.nvim_buf_is_valid(dest) then
-          vim.api.nvim_buf_delete(dest, { force = true })
-        end
-      end,
-    })
-  end
-  -- Two windows may have been opened; `wincmd p` would land on the wrong one.
+  local base_winbar = diff and ("vs deployed  " .. vim.fn.fnamemodify(target, ":~")) or ""
   if vim.api.nvim_win_is_valid(src_win) then
     vim.api.nvim_set_current_win(src_win)
   end
 
   local st = {
     dest = dest,
-    deployed = deployed,
+    diff = diff,
     target = target,
     winbar = base_winbar,
     timer = cfg.live and uv.new_timer() or nil,
@@ -327,8 +335,12 @@ local function preview_toggle(want_diff)
     slow_ms = cfg.slow_ms,
     last_output = nil,
     stale = false,
+    -- Configured off, not backed off, but a reader still needs to know why the
+    -- render is not keeping up with the keystrokes.
+    paused = not cfg.live,
   }
   preview_state[src] = st
+  refresh_winbar(st, dest)
 
   -- One autocmd on all three events: live edits debounce-render, and BufWritePost
   -- renders once live has been dropped to on-write (config or backoff), so the

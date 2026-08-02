@@ -552,6 +552,11 @@ vim.system = function(cmd, _, cb)
   spawns[key] = (spawns[key] or 0) + 1
   sent[key] = cmd
   local ret = vim.deepcopy(fake[key] or { code = 1, stdout = "", stderr = "no fake for " .. key })
+  -- a canned reply can take its time, for the paths that react to a slow spawn
+  if ret.delay_ms then
+    (vim.uv or vim.loop).sleep(ret.delay_ms)
+    ret.delay_ms = nil
+  end
   if cb then
     cb(ret)
   end
@@ -1040,12 +1045,13 @@ do
   resolve.invalidate()
 end
 
--- preview.diff: a second pane holds the deployed file and the render is diffed
--- against it, so the preview shows what the edit changes out there
+-- preview.diff marks the render against the deployed file in place: added and
+-- changed lines highlighted, deleted lines back as virtual lines. One window,
+-- no second buffer to keep in step.
 do
   local deployed = vim.fs.normalize(vim.fn.getcwd()) .. "/chezmoi-test-diffme"
   local df = assert(io.open(deployed, "w"))
-  df:write("one\ntwo\n")
+  df:write("one\ntwo\nthree\n")
   df:close()
 
   local db = vim.api.nvim_create_buf(true, false)
@@ -1057,75 +1063,118 @@ do
   resolve.seed(db, "zsh")
   vim.bo[db].filetype = "gotmpl"
 
+  local ns = vim.api.nvim_create_namespace("chezmoi-template.preview-diff")
+  local function marks(buf)
+    return vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })
+  end
+  local function preview_buf()
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_get_name(b):find("chezmoi%-preview://") and vim.api.nvim_buf_is_valid(b) then
+        return b
+      end
+    end
+  end
+
+  -- a line added by the render, one changed, one left alone
   vim.cmd("silent! only")
   vim.api.nvim_set_current_buf(db)
-  fake["execute-template"] = { code = 0, stdout = "one\nCHANGED\n" }
+  fake["execute-template"] = { code = 0, stdout = "one\nCHANGED\nthree\nfour\n" }
   vim.cmd("Chezmoi diff")
-  local wins = vim.api.nvim_tabpage_list_wins(0)
-  eq("diff adds a deployed pane next to the render", #wins, 3)
+  eq("diff stays in one preview window", #vim.api.nvim_tabpage_list_wins(0), 2)
   eq("focus returns to the template", vim.api.nvim_get_current_buf(), db)
-
-  -- nvim_buf_get_name hands back backslashes on Windows while the names are
-  -- built with "/" on both platforms. Not the bufname() helper: vim.fs.normalize
-  -- collapses the "://" in these pseudo-scheme names down to ":/".
-  local panes = {}
-  for _, w in ipairs(wins) do
-    local b = vim.api.nvim_win_get_buf(w)
-    panes[(vim.api.nvim_buf_get_name(b):gsub("\\", "/"))] = { win = w, buf = b }
-  end
-  local dep = panes["chezmoi-deployed://" .. deployed]
-  local ren = panes["chezmoi-preview://" .. deployed]
-  eq("deployed pane is named after the target", dep ~= nil, true)
-  eq("deployed pane holds what is on disk", vim.api.nvim_buf_get_lines(dep.buf, 0, -1, false), { "one", "two" })
-  eq("both panes are in diff mode", vim.wo[dep.win].diff and vim.wo[ren.win].diff, true)
-  eq("panes are labelled", vim.wo[dep.win].winbar:find("deployed", 1, true) ~= nil, true)
-
+  local dest = preview_buf()
   vim.wait(1000, function()
-    return vim.api.nvim_buf_get_lines(ren.buf, 0, -1, false)[2] == "CHANGED"
+    return #marks(dest) > 0
   end)
-  eq("render pane holds the template output", vim.api.nvim_buf_get_lines(ren.buf, 0, -1, false), { "one", "CHANGED" })
-  eq(
-    "render pane keeps its label after a good render",
-    vim.wo[ren.win].winbar:find("will deploy", 1, true) ~= nil,
-    true
-  )
+  local added = {}
+  for _, m in ipairs(marks(dest)) do
+    if m[4].line_hl_group == "DiffAdd" then
+      added[#added + 1] = m[2]
+    end
+  end
+  table.sort(added)
+  eq("changed and added lines are highlighted", added, { 1, 3 })
+  eq("unchanged lines are left alone", #marks(dest), 3) -- 2 adds + 1 deletion
 
-  -- apply-on-save rewrites the deployed file underneath the preview
+  local virt
+  for _, m in ipairs(marks(dest)) do
+    virt = virt or m[4].virt_lines
+  end
+  eq("the replaced line comes back as a virtual line", virt and virt[1][1][1], "two")
+  eq("deleted text is marked as such", virt and virt[1][1][2], "DiffDelete")
+
+  -- apply-on-save rewrites the deployed file underneath the preview: the marks
+  -- have to follow, or they report changes that already landed
   df = assert(io.open(deployed, "w"))
-  df:write("one\nCHANGED\n")
+  df:write("one\nCHANGED\nthree\nfour\n")
   df:close()
-  fake["execute-template"] = { code = 0, stdout = "one\nCHANGED\nthree\n" }
   vim.api.nvim_buf_set_lines(db, 0, -1, false, { "{{ .x }}" })
   vim.api.nvim_exec_autocmds("TextChanged", { buffer = db })
   vim.wait(1000, function()
-    return #vim.api.nvim_buf_get_lines(dep.buf, 0, -1, false) == 2
-      and vim.api.nvim_buf_get_lines(dep.buf, 0, -1, false)[2] == "CHANGED"
+    return #marks(dest) == 0
   end)
-  eq("deployed pane re-reads on render", vim.api.nvim_buf_get_lines(dep.buf, 0, -1, false), { "one", "CHANGED" })
+  eq("marks clear once the deployed file catches up", #marks(dest), 0)
 
-  -- `q` from the deployed pane tears the whole preview down, not half of it
-  vim.api.nvim_set_current_win(dep.win)
-  vim.api.nvim_feedkeys("q", "x", false)
-  eq("q from the deployed pane closes the render too", vim.api.nvim_buf_is_valid(ren.buf), false)
-  eq("closing the preview wipes the deployed pane", vim.api.nvim_buf_is_valid(dep.buf), false)
+  eq("diff labels the pane", vim.wo[vim.fn.bufwinid(dest)].winbar:find("vs deployed", 1, true) ~= nil, true)
+  vim.cmd("Chezmoi preview") -- toggle closed
 
-  -- plain :Chezmoi preview stays a single pane while preview.diff is off
+  -- a render slower than slow_ms drops live to on-write. The notification says
+  -- so once; the winbar keeps saying so, since the condition holds until the
+  -- preview is reopened.
+  clear_notes()
+  ct.config.preview.slow_ms = 20
+  fake["execute-template"] = { code = 0, stdout = "slow\n", delay_ms = 40 }
   vim.cmd("silent! only")
   vim.api.nvim_set_current_buf(db)
   vim.cmd("Chezmoi preview")
-  eq("preview.diff off keeps one pane", #vim.api.nvim_tabpage_list_wins(0), 2)
+  dest = preview_buf()
+  vim.wait(1000, function()
+    return has_note("live preview paused")
+  end)
+  eq("a slow render pauses live updates", has_note("live preview paused"), true)
+  eq(
+    "the paused state stays in the winbar",
+    vim.wo[vim.fn.bufwinid(dest)].winbar:find("on write", 1, true) ~= nil,
+    true
+  )
+  vim.cmd("Chezmoi preview")
+  ct.config.preview.slow_ms = 500
+
+  -- preview.live = false says the same thing from the start
+  ct.config.preview.live = false
+  vim.api.nvim_set_current_buf(db)
+  vim.cmd("Chezmoi preview")
+  dest = preview_buf()
+  eq("preview.live off is labelled too", vim.wo[vim.fn.bufwinid(dest)].winbar:find("on write", 1, true) ~= nil, true)
+  vim.cmd("Chezmoi preview")
+  ct.config.preview.live = true
+
+  -- plain :Chezmoi preview marks nothing while preview.diff is off
+  vim.cmd("silent! only")
+  vim.api.nvim_set_current_buf(db)
+  fake["execute-template"] = { code = 0, stdout = "totally\ndifferent\n" }
+  vim.cmd("Chezmoi preview")
+  dest = preview_buf()
+  vim.wait(500, function()
+    return false
+  end)
+  eq("preview.diff off marks nothing", #marks(dest), 0)
   vim.cmd("Chezmoi preview")
 
   -- and opts in without the command when the option is set
   ct.config.preview.diff = true
   vim.api.nvim_set_current_buf(db)
   vim.cmd("Chezmoi preview")
-  eq("preview.diff on adds the pane", #vim.api.nvim_tabpage_list_wins(0), 3)
+  dest = preview_buf()
+  vim.wait(1000, function()
+    return #marks(dest) > 0
+  end)
+  eq("preview.diff on marks without the command", #marks(dest) > 0, true)
   vim.cmd("Chezmoi preview")
   ct.config.preview.diff = false
 
-  -- a template with no deploy target renders without a second pane rather
-  -- than refusing: .chezmoitemplates/, .chezmoiscripts/, an unapplied file
+  -- a template with no deploy target has nothing to mark against, and renders
+  -- anyway: .chezmoitemplates/, .chezmoiscripts/, an unapplied file
   fake["target-path"] = { code = 1, stdout = "", stderr = "not managed" }
   resolve.invalidate()
   local nt = vim.api.nvim_create_buf(true, false)
@@ -1134,7 +1183,8 @@ do
   vim.cmd("silent! only")
   vim.api.nvim_set_current_buf(nt)
   vim.cmd("Chezmoi preview")
-  eq("targetless template previews without a deployed pane", #vim.api.nvim_tabpage_list_wins(0), 2)
+  eq("targetless template still previews", preview_buf() ~= nil, true)
+  eq("targetless template marks nothing", #marks(preview_buf()), 0)
   vim.cmd("Chezmoi preview")
 
   vim.fn.delete(deployed)

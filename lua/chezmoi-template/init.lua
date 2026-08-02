@@ -26,7 +26,7 @@ local M = {}
 ---@field debounce? integer ms of idle before a live re-render
 ---@field slow_ms? integer a render slower than this pauses live preview to on-write; 0 disables
 ---@field split? "vertical"|"horizontal" preview window orientation
----@field diff? boolean diff the render against the deployed file in a second pane
+---@field diff? boolean mark the render against the file currently deployed
 
 ---@class chezmoi-template.Config.diagnostics
 ---@field enabled? boolean surface template errors as diagnostics on write
@@ -90,8 +90,8 @@ M.config = {
   -- render until it parses again. slow_ms: if a render takes longer than this,
   -- live pauses to on-write (guards heavy secret-manager templates); 0 disables.
   -- split: "vertical" | "horizontal" preview window orientation
-  -- diff: open the deployed file alongside and diff it against the render, so
-  -- the preview shows what the edit changes out there, not only what it renders
+  -- diff: mark the render against the file currently deployed, so the preview
+  -- shows what the edit changes out there, not only what it renders
   preview = { live = true, debounce = 150, slow_ms = 500, split = "vertical", diff = false },
   -- notify when opening a chezmoi-managed source file (à la chezmoi.nvim)
   notify_on_open = false,
