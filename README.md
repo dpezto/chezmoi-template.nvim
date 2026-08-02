@@ -22,6 +22,7 @@ Most chezmoi integrations wrap the `chezmoi edit` CLI: temporary buffers, watche
   - [Encryption](#encryption)
 - [Completion](#completion)
 - [Picker](#picker)
+- [Keymaps](#keymaps)
 - [Lua API](#lua-api)
 - [Secrets](#secrets)
 - [vs. chezmoi.nvim / chezmoi.vim / the LazyVim extra](#vs-chezmoinvim-chezmoivim-the-lazyvim-extra)
@@ -58,9 +59,10 @@ Most chezmoi integrations wrap the `chezmoi edit` CLI: temporary buffers, watche
 - **Target-aware icons** ([mini.icons](https://github.com/nvim-mini/mini.icons)). `private_dot_config/ghostty/config.tmpl` shows the ghostty icon, not a generic template glyph. Any combination of chezmoi source-state attributes (`private_`, `encrypted_`, `exact_`, `dot_`, `.tmpl`, `.age`, …) resolves to the deployed name.
 - **Transparent encryption** (opt-in). chezmoi-managed `*.age` files decrypt on open and re-encrypt on save via `chezmoi decrypt` / `chezmoi encrypt` — whatever your chezmoi config uses (age, rage, builtin age, even gpg) just works. `encrypted_*.tmpl.age` still gets full template + target highlighting.
 - **`%` matching for template delimiters** ([vim-matchup](https://github.com/andymass/vim-matchup)). `{{ if }}` ⇄ `{{ else }}` ⇄ `{{ end }}`, including `{{-` trim markers.
-- **Live template preview.** `:Chezmoi preview` renders the buffer through `chezmoi execute-template` into a split (vertical by default, `preview.split = "horizontal"` to change) typed as the target filetype, re-rendered live as you type (debounced). Invalid syntax keeps the last valid render — flagged stale in the winbar — until it parses again. `q` (or toggling again) closes it.
+- **Live template preview.** `:Chezmoi preview` renders the buffer through `chezmoi execute-template` into a split (vertical by default, `preview.split = "horizontal"` to change) typed as the target filetype, re-rendered live as you type (debounced). Invalid syntax keeps the last valid render — flagged stale in the winbar — until it parses again. `q` (or toggling again) closes it. Writing a file in `.chezmoitemplates/` re-renders too, so a source that is a bare `{{ template "…" . }}` passthrough still previews the thing it pulls in — on write rather than per keystroke, since chezmoi reads those files from disk.
+- **`gf` follows a template name.** In `{{ template "part.tmpl" . }}` (or `includeTemplate`), `gf` on the name opens `.chezmoitemplates/part.tmpl`. Those files live in the source root, nowhere near the file including them, so plain `gf` never finds them.
 - **Template diagnostics.** Errors from `chezmoi execute-template` surface as `vim.diagnostic` entries on write — template typos stop being invisible until apply fails.
-- **Commands.** One `:Chezmoi` command with subcommands (tab-completed): `apply` (buffer target, or `:Chezmoi! apply` for all; apply-on-save on by default — chezmoi's own source state such as `.chezmoi.toml.tmpl` or `.chezmoiignore` deploys nowhere, so writing one of those reports chezmoi's warnings instead — e.g. a config template that no longer matches the generated config — each reported once rather than on every save), `diff`, `target` (`:Chezmoi! target` opens the deployed file), `source` (jump from a deployed file to its source; the opt-in `redirect` option does it automatically, including for the first file of a session — e.g. a dashboard shortcut that opens a deployed config file), `edit` (`:Chezmoi edit <target>` opens the source for any deploy target, tab-completing target paths), `preview`, `pick` (source-file picker: snacks / telescope / fzf-lua / mini.pick / `vim.ui.select`).
+- **Commands.** One `:Chezmoi` command with subcommands (tab-completed): `apply` (buffer target, or `:Chezmoi! apply` for all; apply-on-save on by default — chezmoi's own source state such as `.chezmoi.toml.tmpl` or `.chezmoiignore` deploys nowhere, so writing one of those reports chezmoi's warnings instead — e.g. a config template that no longer matches the generated config — each reported once rather than on every save), `diff` (the deployed file against what chezmoi would deploy, side by side in Neovim's own diff engine), `target` (`:Chezmoi! target` opens the deployed file), `source` (jump from a deployed file to its source; the opt-in `redirect` option does it automatically, including for the first file of a session — e.g. a dashboard shortcut that opens a deployed config file), `edit` (`:Chezmoi edit <target>` opens the source for any deploy target, tab-completing target paths), `preview`, `pick` (source-file picker: snacks / telescope / fzf-lua / mini.pick / `vim.ui.select`).
 - **Completion** ([blink.cmp](https://github.com/Saghen/blink.cmp)). Context-aware inside `{{ … }}` via the gotmpl treesitter tree: after a dot (`.foo`) it offers only data keys from `chezmoi data` (icons reflect each value's type, docs preview the value); at command position it adds template/sprig/chezmoi functions and Go template keywords; inside string literals it stays quiet. Outside actions: block snippets — `if`, `if/else`, `range`, `with`, `define`, `block`, comments — expanding to full `{{- … }}…{{- end }}` pairs. Falls back to a line heuristic when the gotmpl parser isn't installed.
 
 ![:Chezmoi preview — live rendered template in a split, re-rendered as you type](assets/preview.gif)
@@ -169,6 +171,11 @@ require("chezmoi-template").setup({
     display = "target",        -- entry labels: "target" (.zshrc) or "source" (dot_zshrc.tmpl)
     exclude = {},              -- lua patterns hidden on top of the internals list; false = show all
   },
+  keymaps = {
+    enabled = false,           -- opt-in buffer-local bindings in source buffers
+    prefix = "<localleader>c", -- p preview, a apply, d diff, t target, s source, e edit, f pick
+    icon = nil,                -- glyph for the which-key group; nil = built-in default
+  },
   encryption = {
     enabled = false,           -- opt-in; delegates to chezmoi decrypt/encrypt
     exclude = {},              -- lua patterns (matched on the normalized "/" path) for *.age paths to leave untouched
@@ -271,6 +278,40 @@ Backend auto-detects among loaded pickers (snacks → telescope → fzf-lua → 
 keys = { { "<leader>sz", "<cmd>Chezmoi pick<cr>", desc = "Chezmoi source files" } },
 ```
 
+## Keymaps
+
+No global keys are set. `keymaps.enabled = true` adds buffer-local bindings that exist only in chezmoi source buffers, so a default prefix cannot collide with anything outside them:
+
+```lua
+opts = {
+  keymaps = { enabled = true, prefix = "<localleader>c" },
+}
+```
+
+| key | does |
+| --- | --- |
+| `<prefix>p` | toggle the preview |
+| `<prefix>a` | apply this buffer's target |
+| `<prefix>d` | diff |
+| `<prefix>t` | open the deployed file |
+| `<prefix>s` | jump to the source |
+| `<prefix>e` | `:Chezmoi edit ` on the cmdline |
+| `<prefix>f` | pick a source file |
+
+With [which-key.nvim](https://github.com/folke/which-key.nvim) loaded, the same keys register as a `chezmoi` group, each with an icon, and the preview entry reports the split's current state — `Preview` or `Close Preview`, with a toggle icon and colour to match. `keymaps.icon` replaces the group's glyph (`keymaps = { enabled = true, icon = "" }`).
+
+Rolling your own instead works the same way, and `preview_is_open` gives the dynamic label:
+
+```lua
+{
+  "<localleader>cp",
+  "<cmd>Chezmoi preview<cr>",
+  desc = function()
+    return require("chezmoi-template.commands").preview_is_open(0) and "Close Preview" or "Preview"
+  end,
+}
+```
+
 ## Lua API
 
 For statuslines, custom pickers, or scripts:
@@ -281,6 +322,9 @@ local files = require("chezmoi-template").list()
 
 -- open the chezmoi source for a deploy target (~ is expanded)
 require("chezmoi-template").edit("~/.zshrc")
+
+-- is a preview split open for this buffer? (0 or nil = current)
+require("chezmoi-template.commands").preview_is_open(0)
 ```
 
 `edit(target)` is the programmatic form of `:Chezmoi edit <target>`.

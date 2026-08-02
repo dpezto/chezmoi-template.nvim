@@ -49,6 +49,14 @@ check("target ft seeded", vim.b.chezmoi_target_ft == "zsh", tostring(vim.b.chezm
 vim.cmd.edit(src .. ".chezmoitemplates/oshelper")
 check("partial forced gotmpl", vim.bo.filetype == "gotmpl", vim.bo.filetype)
 
+-- gf on the name in {{ template "oshelper" . }} lands in .chezmoitemplates/
+-- (a never-written buffer, so the source dir stays as smoke.sh built it)
+vim.cmd.edit(src .. "dot_gftest.tmpl")
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { '{{ template "oshelper" . }}' })
+vim.fn.cursor(1, 15)
+vim.cmd("normal! gf")
+check("gf follows a template name", vim.api.nvim_buf_get_name(0):match("oshelper$"), vim.api.nvim_buf_get_name(0))
+
 local done, res
 resolve.execute_template("{{ .chezmoi.os }}", function(r)
   res = r

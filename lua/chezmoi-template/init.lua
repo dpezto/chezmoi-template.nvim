@@ -38,6 +38,11 @@ local M = {}
 ---@field display? "target"|"source" entry labels: deployed names (.zshrc) or raw source names (dot_zshrc.tmpl)
 ---@field exclude? string[]|false lua patterns (vs the source-relative path) hidden on top of the built-in internals list; false = show everything
 
+---@class chezmoi-template.Config.keymaps
+---@field enabled? boolean buffer-local `:Chezmoi` bindings in chezmoi source buffers
+---@field prefix? string lhs the bindings hang off
+---@field icon? string glyph for the which-key group; nil = a built-in default
+
 ---@class chezmoi-template.Config.encryption
 ---@field enabled? boolean transparent decrypt/encrypt of chezmoi-managed encrypted files (*.age, *.asc)
 ---@field exclude? string[] lua patterns for encrypted paths to leave untouched
@@ -54,6 +59,7 @@ local M = {}
 ---@field diagnostics? chezmoi-template.Config.diagnostics
 ---@field completion? chezmoi-template.Config.completion
 ---@field picker? chezmoi-template.Config.picker|string a backend-name string is shorthand for { backend = ... }
+---@field keymaps? chezmoi-template.Config.keymaps
 ---@field encryption? chezmoi-template.Config.encryption
 
 ---@type chezmoi-template.Config
@@ -107,6 +113,15 @@ M.config = {
     -- internals list (picker.DEFAULT_EXCLUDE: .git/, .chezmoi.$FORMAT.tmpl,
     -- .chezmoiversion, .chezmoiroot, .chezmoidata.*); false = show everything
     exclude = {},
+  },
+  -- buffer-local bindings in chezmoi source buffers (opt-in): p preview,
+  -- a apply, d diff, t open target, s open source, e edit, f pick. Registers a
+  -- which-key group with the same keys when which-key is loaded.
+  keymaps = {
+    enabled = false,
+    prefix = "<localleader>c",
+    -- glyph for the which-key group; nil = a built-in Nerd Font home icon
+    icon = nil,
   },
   -- transparent decrypt/encrypt of chezmoi-managed encrypted files (*.age, *.asc)
   -- via `chezmoi decrypt` / `chezmoi encrypt` (age/rage/builtin/gpg, identities,

@@ -15,6 +15,25 @@ local function buf_target(buf)
   return resolve.target_path(file)
 end
 
+-- 'includeexpr' for managed buffers, so `gf` on a name inside
+-- {{ template "name" . }} or {{ includeTemplate "name" . }} opens the file it
+-- names. chezmoi reads those from .chezmoitemplates/ in the source root, which
+-- is nowhere near the including file, so plain `gf` never finds them. Quotes
+-- are not in 'isfname', so v:fname already arrives as the bare name.
+-- Returns fname untouched when it names nothing, leaving `gf` its own behaviour.
+function M.includeexpr(fname)
+  local dir = resolve.source_dir()
+  if not dir then
+    return fname
+  end
+  local path = dir .. ".chezmoitemplates/" .. fname
+  local stat = uv.fs_stat(path)
+  if stat and stat.type == "file" then
+    return path
+  end
+  return fname
+end
+
 -- chezmoi apply, whole state or a single target (async)
 local function apply(target)
   local args = { "apply" }
@@ -37,7 +56,7 @@ local function apply(target)
   end)
 end
 
--- `q` closes plugin-owned scratch splits (diff, preview)
+-- `q` closes the preview split
 local function map_close(buf)
   vim.keymap.set("n", "q", function()
     if vim.api.nvim_buf_is_valid(buf) then
@@ -46,8 +65,9 @@ local function map_close(buf)
   end, { buffer = buf, nowait = true, desc = "close chezmoi split" })
 end
 
-local function open_scratch_split(lines, ft)
-  vim.cmd("botright new")
+-- A scratch buffer holding fixed content, named so the two sides of a diff are
+-- tellable apart in a statusline.
+local function scratch(lines, ft, name)
   local buf = vim.api.nvim_get_current_buf()
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].bufhidden = "wipe"
@@ -57,8 +77,45 @@ local function open_scratch_split(lines, ft)
   if ft then
     vim.bo[buf].filetype = ft
   end
-  map_close(buf)
+  -- pcall: a second diff of the same target would E95 on the name collision
+  pcall(vim.api.nvim_buf_set_name, buf, name)
   return buf
+end
+
+-- Diff one target in a tab of its own, using Neovim's diff engine rather than
+-- chezmoi's textual output: real syntax highlighting, ]c/[c navigation, and
+-- immunity to whatever `diff.command` (delta, difftastic, …) a user's chezmoi
+-- config pipes its own diff through. Left is what is deployed, right is what
+-- chezmoi would deploy — the same direction `chezmoi diff` reports.
+local function diff_target(target)
+  local ret = resolve.chezmoi({ "cat", target }, { text = true }):wait()
+  if ret.code ~= 0 then
+    return notify("diff failed:\n" .. (ret.stderr or ""), vim.log.levels.ERROR)
+  end
+  local want = vim.split(ret.stdout or "", "\n")
+  if want[#want] == "" then
+    table.remove(want) -- trailing newline, not a trailing blank line
+  end
+  -- Missing destination file: everything reads as added, which is the truth.
+  local have = vim.fn.filereadable(target) == 1 and vim.fn.readfile(target) or {}
+  local short = vim.fn.fnamemodify(target, ":~")
+  if vim.deep_equal(have, want) then
+    return notify("no differences for " .. short)
+  end
+
+  local ft = resolve.target_ft(target)
+  vim.cmd("tabnew")
+  local left = scratch(have, ft, "chezmoi-diff://deployed" .. target)
+  vim.wo.winbar = "deployed  " .. short
+  vim.cmd("vertical rightbelow new")
+  local right = scratch(want, ft, "chezmoi-diff://target" .. target)
+  vim.wo.winbar = "chezmoi target state  " .. short
+  vim.cmd("windo diffthis")
+  -- `q` from either side drops the whole tab; closing one window alone would
+  -- leave the other in diff mode with nothing to compare against.
+  for _, b in ipairs({ left, right }) do
+    vim.keymap.set("n", "q", "<cmd>tabclose<cr>", { buffer = b, nowait = true, desc = "close chezmoi diff" })
+  end
 end
 
 -- :Chezmoi preview — render the current template via execute-template into a
@@ -262,6 +319,31 @@ local function preview_toggle()
     end,
   })
 
+  -- A source can be a bare passthrough to .chezmoitemplates/, in which case
+  -- every line worth previewing lives in a file this autocmd would otherwise
+  -- ignore. execute-template reads those from disk, so an unwritten edit is
+  -- invisible to chezmoi and there is nothing to render until the write —
+  -- unlike the source buffer, this cannot follow the keystrokes.
+  -- ponytail: any .chezmoitemplates write re-renders every open preview, no
+  -- dependency tracking. An unrelated write costs one spawn and the last_output
+  -- check above keeps the buffer untouched; parse the include names at toggle
+  -- time if that ever shows up in a profile.
+  vim.api.nvim_create_autocmd("BufWritePost", {
+    group = "chezmoi-template.commands",
+    callback = function(ev)
+      -- Path match, not an autocmd pattern: a raw ev.file is backslashed on
+      -- Windows and would dodge a "/"-style glob.
+      if not vim.fs.normalize(ev.file):find("/.chezmoitemplates/", 1, true) then
+        return
+      end
+      if not vim.api.nvim_buf_is_valid(dest) then
+        preview_teardown(src)
+        return true -- preview closed; drop the autocmd
+      end
+      preview_render(src, dest)
+    end,
+  })
+
   -- Closing the preview (q / :q) wipes dest — free the timer right away instead
   -- of waiting for the next keystroke to notice.
   vim.api.nvim_create_autocmd("BufWipeout", {
@@ -273,6 +355,16 @@ local function preview_toggle()
   })
 
   preview_render(src, dest)
+end
+
+-- Whether a preview split is open for a buffer. Public so a statusline or a
+-- which-key `desc`/`icon` function can label the toggle with its current state.
+function M.preview_is_open(buf)
+  if buf == nil or buf == 0 then
+    buf = vim.api.nvim_get_current_buf()
+  end
+  local st = preview_state[buf]
+  return st ~= nil and vim.api.nvim_buf_is_valid(st.dest)
 end
 
 -- obsidian.nvim-style single command: `:Chezmoi <sub>` dispatches to one of
@@ -293,22 +385,16 @@ local subcommands = {
   },
 
   diff = {
-    desc = "diff for current target (whole state on non-chezmoi buffers)",
+    desc = "diff the current buffer's target against the deployed file",
     run = function()
       local target = buf_target(0)
-      local args = { "diff" }
-      if target then
-        table.insert(args, target)
+      if not target then
+        -- Source state that deploys nowhere (.chezmoitemplates/,
+        -- .chezmoiscripts/, .chezmoiignore) has no file of its own to compare
+        -- against. Whole-tree diffs are a git question; git tooling answers it.
+        return notify("buffer has no chezmoi target", vim.log.levels.WARN)
       end
-      local ret = resolve.chezmoi(args, { text = true }):wait()
-      if ret.code ~= 0 and (ret.stderr or "") ~= "" then
-        return notify("diff failed:\n" .. ret.stderr, vim.log.levels.ERROR)
-      end
-      local out = ret.stdout or ""
-      if vim.trim(out) == "" then
-        return notify("no differences" .. (target and " for " .. vim.fn.fnamemodify(target, ":~") or ""))
-      end
-      open_scratch_split(vim.split(out, "\n"), "diff")
+      diff_target(target)
     end,
   },
 
@@ -410,6 +496,92 @@ local function define_commands()
   })
 end
 
+-- Buffer-local bindings, off by default. A plugin claiming global keys collides
+-- with whatever already owns the prefix (LazyVim's chezmoi extra takes
+-- <leader>sz), but scoped to chezmoi source buffers a default prefix costs
+-- nothing elsewhere. `edit` takes a target, so it leaves the cmdline open.
+-- Nerd Font glyphs by codepoint. Pasting them literally into source is fragile:
+-- private-use characters do not survive every editor, terminal or patch tool,
+-- and a stripped glyph fails silently as a blank icon.
+local NF = {
+  home = 0xf015, -- the group
+  check = 0xf00c, -- apply
+  arrow_right = 0xf061, -- source -> deployed
+  arrow_left = 0xf060, -- deployed -> source
+  pencil = 0xf040, -- edit
+  search = 0xf002, -- pick
+  toggle_on = 0xf205, -- preview open (the pair snacks.nvim uses)
+  toggle_off = 0xf204, -- preview closed
+}
+
+local function icon(cp, color)
+  return { icon = vim.fn.nr2char(cp) .. " ", color = color }
+end
+
+local keymap_specs = {
+  { key = "p", rhs = "<cmd>Chezmoi preview<cr>", desc = "Preview" },
+  { key = "a", rhs = "<cmd>Chezmoi apply<cr>", desc = "Apply", icon = icon(NF.check, "green") },
+  -- mini.icons/nvim-web-devicons already have a diff glyph; let which-key ask
+  { key = "d", rhs = "<cmd>Chezmoi diff<cr>", desc = "Diff", icon = { cat = "filetype", name = "diff" } },
+  { key = "t", rhs = "<cmd>Chezmoi! target<cr>", desc = "Open Target", icon = icon(NF.arrow_right, "orange") },
+  { key = "s", rhs = "<cmd>Chezmoi source<cr>", desc = "Open Source", icon = icon(NF.arrow_left, "blue") },
+  { key = "e", rhs = ":Chezmoi edit ", desc = "Edit Target", icon = icon(NF.pencil, "purple") },
+  { key = "f", rhs = "<cmd>Chezmoi pick<cr>", desc = "Find Source File", icon = icon(NF.search, "green") },
+}
+
+local function preview_label()
+  return M.preview_is_open(0) and "Close Preview" or "Preview"
+end
+
+local function preview_icon()
+  if M.preview_is_open(0) then
+    return icon(NF.toggle_on, "green")
+  end
+  return icon(NF.toggle_off, "yellow")
+end
+
+-- which-key evaluates a spec's desc/icon functions every time the popup opens,
+-- so the preview entry reports the split's current state without this plugin
+-- depending on which-key (or snacks) to provide a toggle abstraction.
+local function which_key_add(buf, prefix, group_icon)
+  local spec = {
+    {
+      prefix,
+      group = "chezmoi",
+      icon = group_icon and { icon = group_icon, color = "cyan" } or icon(NF.home, "cyan"),
+      buffer = buf,
+    },
+  }
+  for _, s in ipairs(keymap_specs) do
+    spec[#spec + 1] = {
+      prefix .. s.key,
+      buffer = buf,
+      desc = s.key == "p" and preview_label or s.desc,
+      icon = s.key == "p" and preview_icon or s.icon,
+    }
+  end
+  require("which-key").add(spec)
+end
+
+local function attach_buffer(buf, config)
+  -- `gf` only consults 'includeexpr' when the name is not a readable path as
+  -- written, so this costs nothing for ordinary paths. Never overwrite a value
+  -- the user or another plugin set.
+  if vim.bo[buf].includeexpr == "" then
+    vim.bo[buf].includeexpr = "v:lua.require'chezmoi-template.commands'.includeexpr(v:fname)"
+  end
+  if not config.keymaps.enabled then
+    return
+  end
+  local prefix = config.keymaps.prefix
+  for _, s in ipairs(keymap_specs) do
+    vim.keymap.set("n", prefix .. s.key, s.rhs, { buffer = buf, desc = "chezmoi: " .. s.desc })
+  end
+  if package.loaded["which-key"] then
+    which_key_add(buf, prefix, config.keymaps.icon)
+  end
+end
+
 -- Last chezmoi warning reported after a source-state write, so a standing one
 -- is not repeated on every save. nil = nothing outstanding.
 local last_warning
@@ -419,6 +591,22 @@ function M.setup()
   vim.api.nvim_create_augroup("chezmoi-template.commands", { clear = true })
   define_commands()
   last_warning = nil
+
+  vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
+    group = "chezmoi-template.commands",
+    callback = function(ctx)
+      if resolve.is_managed(ctx.file) then
+        attach_buffer(ctx.buf, config)
+      end
+    end,
+  })
+  -- Activation can come from a :Chezmoi command in an already-open source
+  -- buffer, whose BufReadPost is long past — that buffer would otherwise wait
+  -- for a reload to get its bindings.
+  local cur = vim.api.nvim_get_current_buf()
+  if resolve.is_managed(vim.api.nvim_buf_get_name(cur)) then
+    attach_buffer(cur, config)
+  end
 
   if config.apply.on_save then
     vim.api.nvim_create_autocmd("BufWritePost", {
