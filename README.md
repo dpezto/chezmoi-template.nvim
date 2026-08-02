@@ -60,10 +60,10 @@ Most chezmoi integrations wrap the `chezmoi edit` CLI: temporary buffers, watche
 - **Transparent encryption** (opt-in). chezmoi-managed `*.age` files decrypt on open and re-encrypt on save via `chezmoi decrypt` / `chezmoi encrypt` — whatever your chezmoi config uses (age, rage, builtin age, even gpg) just works. `encrypted_*.tmpl.age` still gets full template + target highlighting.
 - **`%` matching for template delimiters** ([vim-matchup](https://github.com/andymass/vim-matchup)). `{{ if }}` ⇄ `{{ else }}` ⇄ `{{ end }}`, including `{{-` trim markers.
 - **Live template preview.** `:Chezmoi preview` renders the buffer through `chezmoi execute-template` into a split (vertical by default, `preview.split = "horizontal"` to change) typed as the target filetype, re-rendered live as you type (debounced). Invalid syntax keeps the last valid render — flagged stale in the winbar — until it parses again. `q` (or toggling again) closes it. Writing a file in `.chezmoitemplates/` re-renders too, so a source that is a bare `{{ template "…" . }}` passthrough still previews the thing it pulls in — on write rather than per keystroke, since chezmoi reads those files from disk.
-- **The preview can show what the edit changes out there.** `preview.diff` (opt-in, or `:Chezmoi diff` for one invocation) marks the render against the file currently in `$HOME`, in the preview buffer itself: added and changed lines get a `DiffAdd` highlight, lines the edit removes come back as `DiffDelete` virtual lines. Still one window, and the deployed file is re-read on every render so an apply landing underneath shows up. That is the one comparison git tooling cannot make — the deployed state is in no repository.
+- **The preview can show what the edit changes out there.** `preview.diff` (opt-in) marks the render against the file currently in `$HOME`, in the preview buffer itself: added and changed lines get a `DiffAdd` highlight, lines the edit removes come back as `DiffDelete` virtual lines. Still one window, and the deployed file is re-read on every render so an apply landing underneath shows up. That is the one comparison git tooling cannot make — the deployed state is in no repository.
 - **`gf` follows a template name.** In `{{ template "part.tmpl" . }}` (or `includeTemplate`), `gf` on the name opens `.chezmoitemplates/part.tmpl`. Those files live in the source root, nowhere near the file including them, so plain `gf` never finds them.
 - **Template diagnostics.** Errors from `chezmoi execute-template` surface as `vim.diagnostic` entries on write — template typos stop being invisible until apply fails.
-- **Commands.** One `:Chezmoi` command with subcommands (tab-completed): `apply` (buffer target, or `:Chezmoi! apply` for all; apply-on-save on by default — chezmoi's own source state such as `.chezmoi.toml.tmpl` or `.chezmoiignore` deploys nowhere, so writing one of those reports chezmoi's warnings instead — e.g. a config template that no longer matches the generated config — each reported once rather than on every save), `diff` (the preview with `preview.diff` forced on for one invocation), `target` (`:Chezmoi! target` opens the deployed file), `source` (jump from a deployed file to its source; the opt-in `redirect` option does it automatically, including for the first file of a session — e.g. a dashboard shortcut that opens a deployed config file), `edit` (`:Chezmoi edit <target>` opens the source for any deploy target, tab-completing target paths), `preview`, `pick` (source-file picker: snacks / telescope / fzf-lua / mini.pick / `vim.ui.select`).
+- **Commands.** One `:Chezmoi` command with subcommands (tab-completed): `apply` (buffer target, or `:Chezmoi! apply` for all; apply-on-save on by default — chezmoi's own source state such as `.chezmoi.toml.tmpl` or `.chezmoiignore` deploys nowhere, so writing one of those reports chezmoi's warnings instead — e.g. a config template that no longer matches the generated config — each reported once rather than on every save), `target` (`:Chezmoi! target` opens the deployed file), `source` (jump from a deployed file to its source; the opt-in `redirect` option does it automatically, including for the first file of a session — e.g. a dashboard shortcut that opens a deployed config file), `edit` (`:Chezmoi edit <target>` opens the source for any deploy target, tab-completing target paths), `preview`, `pick` (source-file picker: snacks / telescope / fzf-lua / mini.pick / `vim.ui.select`).
 - **Completion** ([blink.cmp](https://github.com/Saghen/blink.cmp)). Context-aware inside `{{ … }}` via the gotmpl treesitter tree: after a dot (`.foo`) it offers only data keys from `chezmoi data` (icons reflect each value's type, docs preview the value); at command position it adds template/sprig/chezmoi functions and Go template keywords; inside string literals it stays quiet. Outside actions: block snippets — `if`, `if/else`, `range`, `with`, `define`, `block`, comments — expanding to full `{{- … }}…{{- end }}` pairs. Falls back to a line heuristic when the gotmpl parser isn't installed.
 
 ![:Chezmoi preview — live rendered template in a split, re-rendered as you type](assets/preview.gif)
@@ -175,7 +175,7 @@ require("chezmoi-template").setup({
   },
   keymaps = {
     enabled = false,           -- opt-in buffer-local bindings in source buffers
-    prefix = "<localleader>c", -- p preview, a apply, d diff, t target, s source, e edit, f pick
+    prefix = "<localleader>c", -- p preview, a apply, t target, s source, e edit, f pick
     icon = nil,                -- glyph for the which-key group; nil = built-in default
   },
   encryption = {
@@ -294,7 +294,6 @@ opts = {
 | --- | --- |
 | `<prefix>p` | toggle the preview |
 | `<prefix>a` | apply this buffer's target |
-| `<prefix>d` | diff |
 | `<prefix>t` | open the deployed file |
 | `<prefix>s` | jump to the source |
 | `<prefix>e` | `:Chezmoi edit ` on the cmdline |

@@ -137,7 +137,7 @@ M.config = {
 
 -- Static subcommand names for pre-activation tab-completion; the real command
 -- (commands.lua) derives its own from the handler table. Kept in sync by hand.
-local SUBCOMMANDS = { "apply", "diff", "edit", "pick", "preview", "source", "target" }
+local SUBCOMMANDS = { "apply", "edit", "pick", "preview", "source", "target" }
 
 -- setup() is cheap: it only registers filetype detection, the treesitter
 -- injection directive, and light triggers. The heavy work (module requires,

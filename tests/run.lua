@@ -983,7 +983,7 @@ do
     maps[m.lhs] = m.rhs
   end
   eq("keymaps.enabled binds the prefix", maps[",zp"], "<Cmd>Chezmoi preview<CR>")
-  eq("keymaps cover every subcommand", vim.tbl_count(maps), 7)
+  eq("keymaps cover every subcommand", vim.tbl_count(maps), 6)
   eq("which-key gets a chezmoi group", wk_spec[1].group, "chezmoi")
   -- glyphs are built from codepoints: a literal Nerd Font character in the
   -- source is one lossy copy/paste away from a silently blank icon
@@ -1019,32 +1019,6 @@ do
   vim.fn.delete(SRC .. "/.chezmoitemplates", "rf")
 end
 
--- :Chezmoi diff needs a deploy target: source state that deploys nowhere
--- (.chezmoitemplates/, .chezmoiignore, …) has no file of its own to compare
--- against, and whole-tree diffs are a git question
-do
-  clear_notes()
-  local prev_target = fake["target-path"]
-  fake["target-path"] = { code = 1, stdout = "", stderr = "not managed" }
-  resolve.invalidate()
-  local nb = vim.api.nvim_create_buf(true, false)
-  vim.api.nvim_buf_set_name(nb, SRC .. "/.chezmoitemplates/shared.md")
-  vim.bo[nb].filetype = "gotmpl"
-  vim.api.nvim_set_current_buf(nb)
-  vim.cmd("Chezmoi diff")
-  eq("targetless buffer refuses to diff", has_note("buffer has no chezmoi target"), true)
-
-  -- and a buffer that is not a template at all is refused before any of that
-  clear_notes()
-  local plain = vim.api.nvim_create_buf(true, false)
-  vim.api.nvim_set_current_buf(plain)
-  vim.cmd("Chezmoi diff")
-  eq("non-template buffer refuses to diff", has_note("not a chezmoi template buffer"), true)
-
-  fake["target-path"] = prev_target
-  resolve.invalidate()
-end
-
 -- preview.diff marks the render against the deployed file in place: added and
 -- changed lines highlighted, deleted lines back as virtual lines. One window,
 -- no second buffer to keep in step.
@@ -1076,10 +1050,11 @@ do
   end
 
   -- a line added by the render, one changed, one left alone
+  ct.config.preview.diff = true
   vim.cmd("silent! only")
   vim.api.nvim_set_current_buf(db)
   fake["execute-template"] = { code = 0, stdout = "one\nCHANGED\nthree\nfour\n" }
-  vim.cmd("Chezmoi diff")
+  vim.cmd("Chezmoi preview")
   eq("diff stays in one preview window", #vim.api.nvim_tabpage_list_wins(0), 2)
   eq("focus returns to the template", vim.api.nvim_get_current_buf(), db)
   local dest = preview_buf()
@@ -1149,7 +1124,8 @@ do
   vim.cmd("Chezmoi preview")
   ct.config.preview.live = true
 
-  -- plain :Chezmoi preview marks nothing while preview.diff is off
+  -- preview.diff off marks nothing
+  ct.config.preview.diff = false
   vim.cmd("silent! only")
   vim.api.nvim_set_current_buf(db)
   fake["execute-template"] = { code = 0, stdout = "totally\ndifferent\n" }
@@ -1159,19 +1135,8 @@ do
     return false
   end)
   eq("preview.diff off marks nothing", #marks(dest), 0)
+  eq("preview.diff off leaves the winbar bare", vim.wo[vim.fn.bufwinid(dest)].winbar, "")
   vim.cmd("Chezmoi preview")
-
-  -- and opts in without the command when the option is set
-  ct.config.preview.diff = true
-  vim.api.nvim_set_current_buf(db)
-  vim.cmd("Chezmoi preview")
-  dest = preview_buf()
-  vim.wait(1000, function()
-    return #marks(dest) > 0
-  end)
-  eq("preview.diff on marks without the command", #marks(dest) > 0, true)
-  vim.cmd("Chezmoi preview")
-  ct.config.preview.diff = false
 
   -- a template with no deploy target has nothing to mark against, and renders
   -- anyway: .chezmoitemplates/, .chezmoiscripts/, an unapplied file

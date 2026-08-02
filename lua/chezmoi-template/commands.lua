@@ -197,13 +197,17 @@ local function preview_render(src, dest)
     st.tick = vim.api.nvim_buf_get_changedtick(src)
   end
   resolve.execute_template(text, function(ret)
+    -- Time the spawn here, not inside the vim.schedule below: scheduling waits
+    -- on whatever else the editor is doing, and charging that to the template
+    -- lets one busy moment latch live preview off for the rest of the session.
+    local spawn_ms = (uv.hrtime() - t0) / 1e6
     vim.schedule(function()
       if st then
         st.rendering = false
         -- Only back off if this is still the active preview (not one torn down
         -- while its render was in flight).
         if preview_state[src] == st then
-          maybe_backoff(st, dest, (uv.hrtime() - t0) / 1e6)
+          maybe_backoff(st, dest, spawn_ms)
         end
       end
       if not vim.api.nvim_buf_is_valid(dest) then
@@ -276,8 +280,7 @@ local function schedule_render(src)
   )
 end
 
--- want_diff overrides preview.diff for one invocation (`:Chezmoi diff`).
-local function preview_toggle(want_diff)
+local function preview_toggle()
   local src = vim.api.nvim_get_current_buf()
   local existing = preview_state[src]
   if existing and vim.api.nvim_buf_is_valid(existing.dest) then
@@ -298,8 +301,8 @@ local function preview_toggle(want_diff)
   local src_file = vim.api.nvim_buf_get_name(src)
   local target = resolve.target_path(src_file)
   -- Nothing deployed to compare against: .chezmoitemplates/, .chezmoiscripts/,
-  -- an unapplied new file. Render without the second pane rather than refuse.
-  local diff = (want_diff == nil and cfg.diff or want_diff) and target ~= nil
+  -- an unapplied new file. Render unmarked rather than refuse.
+  local diff = cfg.diff and target ~= nil
   local src_win = vim.api.nvim_get_current_win()
 
   vim.cmd((cfg.split == "horizontal" and "" or "vertical ") .. "botright new")
@@ -428,19 +431,6 @@ local subcommands = {
     end,
   },
 
-  diff = {
-    desc = "preview the current template diffed against the deployed file",
-    run = function()
-      -- Source state that deploys nowhere (.chezmoitemplates/,
-      -- .chezmoiscripts/, .chezmoiignore) has no file of its own to compare
-      -- against. Whole-tree diffs are a git question; git tooling answers it.
-      if vim.bo.filetype == "gotmpl" and not buf_target(vim.api.nvim_get_current_buf()) then
-        return notify("buffer has no chezmoi target", vim.log.levels.WARN)
-      end
-      preview_toggle(true)
-    end,
-  },
-
   target = {
     desc = "show current buffer's deploy target (! = open it)",
     run = function(ctx)
@@ -498,9 +488,7 @@ local subcommands = {
 
   preview = {
     desc = "toggle rendered preview of the current template (updates live as you type)",
-    run = function()
-      preview_toggle()
-    end,
+    run = preview_toggle,
   },
 
   pick = {
@@ -566,8 +554,6 @@ end
 local keymap_specs = {
   { key = "p", rhs = "<cmd>Chezmoi preview<cr>", desc = "Preview" },
   { key = "a", rhs = "<cmd>Chezmoi apply<cr>", desc = "Apply", icon = icon(NF.check, "green") },
-  -- mini.icons/nvim-web-devicons already have a diff glyph; let which-key ask
-  { key = "d", rhs = "<cmd>Chezmoi diff<cr>", desc = "Diff", icon = { cat = "filetype", name = "diff" } },
   { key = "t", rhs = "<cmd>Chezmoi! target<cr>", desc = "Open Target", icon = icon(NF.arrow_right, "orange") },
   { key = "s", rhs = "<cmd>Chezmoi source<cr>", desc = "Open Source", icon = icon(NF.arrow_left, "blue") },
   { key = "e", rhs = ":Chezmoi edit ", desc = "Edit Target", icon = icon(NF.pencil, "purple") },

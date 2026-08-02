@@ -36,7 +36,7 @@ source files, so you edit them natively instead of going through
 - Optional transparent decrypt/encrypt of chezmoi-managed encrypted files
   (*.age, *.asc).
 - Template errors surface as |vim.diagnostic| entries on write.
-- User commands for apply/diff/preview/source-jumping, and |gf| on a
+- User commands for apply/preview/source-jumping, and |gf| on a
   `{{ template "…" }}` name opens the file in `.chezmoitemplates/`.
 
 Everything degrades gracefully when the `chezmoi` binary is missing.
@@ -178,16 +178,6 @@ encryption.exclude lua patterns leave matching paths as plain binary.
                       `:Chezmoi! apply` to deploy the effect of such an edit, or
                       `chezmoi init` to regenerate the config.
 
-                                                              *:Chezmoi-diff*
-:Chezmoi diff         Open the preview with preview.diff forced on for this
-                      one invocation. See |:Chezmoi-preview|.
-
-                      Source state that deploys nowhere — `.chezmoitemplates/`,
-                      `.chezmoiscripts/`, `.chezmoiignore` — has no file of its
-                      own to compare against, and reports that rather than
-                      diffing something else. Whole-tree diffs are a git
-                      question, answered by git tooling.
-
                                                             *:Chezmoi-target*
 :Chezmoi target       Echo the current buffer's deploy target path.
 :Chezmoi! target      Open the deployed file.
@@ -304,7 +294,6 @@ collide with anything outside a source buffer.
 
     <prefix>p     toggle the preview
     <prefix>a     apply this buffer's target
-    <prefix>d     diff
     <prefix>t     open the deployed file
     <prefix>s     jump to the source
     <prefix>e     leave `:Chezmoi edit ` on the cmdline
