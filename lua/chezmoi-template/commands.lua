@@ -65,64 +65,25 @@ local function map_close(buf)
   end, { buffer = buf, nowait = true, desc = "close chezmoi split" })
 end
 
--- A scratch buffer holding fixed content, named so the two sides of a diff are
--- tellable apart in a statusline.
-local function scratch(lines, ft, name)
-  local buf = vim.api.nvim_get_current_buf()
-  vim.bo[buf].buftype = "nofile"
-  vim.bo[buf].bufhidden = "wipe"
-  vim.bo[buf].swapfile = false
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.bo[buf].modifiable = false
-  if ft then
-    vim.bo[buf].filetype = ft
+-- Lines currently on disk at the deploy target. Missing file = everything the
+-- template renders reads as added, which is the truth.
+local function deployed_lines(target)
+  if not target or vim.fn.filereadable(target) ~= 1 then
+    return {}
   end
-  -- pcall: a second diff of the same target would E95 on the name collision
-  pcall(vim.api.nvim_buf_set_name, buf, name)
-  return buf
-end
-
--- Diff one target in a tab of its own, using Neovim's diff engine rather than
--- chezmoi's textual output: real syntax highlighting, ]c/[c navigation, and
--- immunity to whatever `diff.command` (delta, difftastic, …) a user's chezmoi
--- config pipes its own diff through. Left is what is deployed, right is what
--- chezmoi would deploy — the same direction `chezmoi diff` reports.
-local function diff_target(target)
-  local ret = resolve.chezmoi({ "cat", target }, { text = true }):wait()
-  if ret.code ~= 0 then
-    return notify("diff failed:\n" .. (ret.stderr or ""), vim.log.levels.ERROR)
-  end
-  local want = vim.split(ret.stdout or "", "\n")
-  if want[#want] == "" then
-    table.remove(want) -- trailing newline, not a trailing blank line
-  end
-  -- Missing destination file: everything reads as added, which is the truth.
-  local have = vim.fn.filereadable(target) == 1 and vim.fn.readfile(target) or {}
-  local short = vim.fn.fnamemodify(target, ":~")
-  if vim.deep_equal(have, want) then
-    return notify("no differences for " .. short)
-  end
-
-  local ft = resolve.target_ft(target)
-  vim.cmd("tabnew")
-  local left = scratch(have, ft, "chezmoi-diff://deployed" .. target)
-  vim.wo.winbar = "deployed  " .. short
-  vim.cmd("vertical rightbelow new")
-  local right = scratch(want, ft, "chezmoi-diff://target" .. target)
-  vim.wo.winbar = "chezmoi target state  " .. short
-  vim.cmd("windo diffthis")
-  -- `q` from either side drops the whole tab; closing one window alone would
-  -- leave the other in diff mode with nothing to compare against.
-  for _, b in ipairs({ left, right }) do
-    vim.keymap.set("n", "q", "<cmd>tabclose<cr>", { buffer = b, nowait = true, desc = "close chezmoi diff" })
-  end
+  return vim.fn.readfile(target)
 end
 
 -- :Chezmoi preview — render the current template via execute-template into a
 -- vsplit typed as the target filetype; re-renders live as you type (or on write
 -- when preview.live is false). Running it again closes the preview.
--- state: src buf -> { dest, timer, tick, rendering, pending, live, slow_ms,
---                     last_output, stale }
+-- With preview.diff, a second pane holds the deployed file and the two are put
+-- in diff mode, so the render reads as "what this edit will change out there"
+-- rather than just "what this renders to". Neovim's diff engine sees the
+-- rendered text directly, which is the one comparison git tooling cannot make:
+-- the deployed state is not in any repository.
+-- state: src buf -> { dest, deployed, target, timer, tick, rendering, pending,
+--                     live, slow_ms, last_output, stale }
 local preview_state = {}
 
 -- Freeing a preview's window handle + debounce timer, from either the toggle-off
@@ -133,6 +94,11 @@ local function preview_teardown(src)
     st.timer:stop()
     st.timer:close()
     st.timer = nil
+  end
+  -- The deployed pane exists only to be diffed against the render; on its own
+  -- it is a copy of a file the user can just open.
+  if st and st.deployed and vim.api.nvim_buf_is_valid(st.deployed) then
+    vim.api.nvim_buf_delete(st.deployed, { force = true })
   end
   preview_state[src] = nil
 end
@@ -149,7 +115,9 @@ local function set_stale(st, dest, stale)
   end
   local win = vim.fn.bufwinid(dest)
   if win ~= -1 then
-    vim.wo[win].winbar = stale and "%#WarningMsg#⚠ preview stale (invalid template)%*" or ""
+    -- Restore whatever the pane said before, not "": in diff mode the winbar
+    -- is what tells the two sides apart.
+    vim.wo[win].winbar = stale and "%#WarningMsg#⚠ preview stale (invalid template)%*" or (st and st.winbar or "")
   end
 end
 
@@ -205,6 +173,16 @@ local function preview_render(src, dest)
             st.last_output = ret.stdout
           end
         end
+        -- Re-read the deployed side every render: apply-on-save rewrites that
+        -- file underneath the preview, and a diff against a stale copy reports
+        -- changes that have already landed.
+        -- ponytail: one small readfile per render; cache on mtime if it ever
+        -- shows up next to the execute-template spawn it rides along with.
+        if st and st.deployed and vim.api.nvim_buf_is_valid(st.deployed) then
+          vim.bo[st.deployed].modifiable = true
+          vim.api.nvim_buf_set_lines(st.deployed, 0, -1, false, deployed_lines(st.target))
+          vim.bo[st.deployed].modifiable = false
+        end
         set_stale(st, dest, false)
       else
         -- Invalid template: keep the last valid render, flag it stale.
@@ -249,7 +227,8 @@ local function schedule_render(src)
   )
 end
 
-local function preview_toggle()
+-- want_diff overrides preview.diff for one invocation (`:Chezmoi diff`).
+local function preview_toggle(want_diff)
   local src = vim.api.nvim_get_current_buf()
   local existing = preview_state[src]
   if existing and vim.api.nvim_buf_is_valid(existing.dest) then
@@ -267,7 +246,33 @@ local function preview_toggle()
 
   local cfg = require("chezmoi-template").config.preview
   local target_ft = vim.b[src].chezmoi_target_ft
+  local src_file = vim.api.nvim_buf_get_name(src)
+  local target = resolve.target_path(src_file)
+  -- Nothing deployed to compare against: .chezmoitemplates/, .chezmoiscripts/,
+  -- an unapplied new file. Render without the second pane rather than refuse.
+  local diff = (want_diff == nil and cfg.diff or want_diff) and target ~= nil
+  local src_win = vim.api.nvim_get_current_win()
+
   vim.cmd((cfg.split == "horizontal" and "" or "vertical ") .. "botright new")
+  local deployed
+  if diff then
+    deployed = vim.api.nvim_get_current_buf()
+    vim.bo[deployed].buftype = "nofile"
+    vim.bo[deployed].bufhidden = "wipe"
+    vim.bo[deployed].swapfile = false
+    vim.api.nvim_buf_set_lines(deployed, 0, -1, false, deployed_lines(target))
+    vim.bo[deployed].modifiable = false
+    if target_ft and target_ft ~= "gotmpl" then
+      vim.bo[deployed].filetype = target_ft
+    end
+    -- pcall: a second preview of the same target would E95 on the name collision
+    pcall(vim.api.nvim_buf_set_name, deployed, "chezmoi-deployed://" .. target)
+    vim.wo.winbar = "deployed  " .. vim.fn.fnamemodify(target, ":~")
+    -- Side by side whatever preview.split says: a diff read top to bottom is
+    -- not a diff anyone reads.
+    vim.cmd("vertical rightbelow new")
+  end
+
   local dest = vim.api.nvim_get_current_buf()
   vim.bo[dest].buftype = "nofile"
   vim.bo[dest].bufhidden = "wipe"
@@ -275,18 +280,45 @@ local function preview_toggle()
   -- Named after the deploy target so statuslines/tabs show the rendered
   -- file's identity (dot_zshrc.tmpl previews as .zshrc); the protocol prefix
   -- keeps it distinct from the real target buffer and unique per source.
-  local src_file = vim.api.nvim_buf_get_name(src)
-  local target_name = resolve.target_path(src_file) or resolve.resolve_path(vim.fn.fnamemodify(src_file, ":t"))
+  local target_name = target or resolve.resolve_path(vim.fn.fnamemodify(src_file, ":t"))
   -- pcall: a second preview with the same target name would E95 on collision
   pcall(vim.api.nvim_buf_set_name, dest, "chezmoi-preview://" .. target_name)
   if target_ft and target_ft ~= "gotmpl" then
     vim.bo[dest].filetype = target_ft
   end
   map_close(dest)
-  vim.cmd.wincmd("p")
+  local base_winbar = ""
+  if diff then
+    base_winbar = "will deploy  " .. vim.fn.fnamemodify(target, ":~")
+    vim.wo.winbar = base_winbar
+    vim.api.nvim_win_call(vim.fn.bufwinid(deployed), function()
+      vim.cmd("diffthis")
+    end)
+    vim.cmd("diffthis")
+    map_close(deployed)
+    -- However the deployed pane goes away (`q`, :q, a window close wiping it),
+    -- the render goes with it: left alone it is a copy of a file the user could
+    -- have opened, still stuck in diff mode against nothing.
+    vim.api.nvim_create_autocmd("BufWipeout", {
+      group = "chezmoi-template.commands",
+      buffer = deployed,
+      callback = function()
+        if vim.api.nvim_buf_is_valid(dest) then
+          vim.api.nvim_buf_delete(dest, { force = true })
+        end
+      end,
+    })
+  end
+  -- Two windows may have been opened; `wincmd p` would land on the wrong one.
+  if vim.api.nvim_win_is_valid(src_win) then
+    vim.api.nvim_set_current_win(src_win)
+  end
 
   local st = {
     dest = dest,
+    deployed = deployed,
+    target = target,
+    winbar = base_winbar,
     timer = cfg.live and uv.new_timer() or nil,
     tick = -1,
     rendering = false,
@@ -385,16 +417,15 @@ local subcommands = {
   },
 
   diff = {
-    desc = "diff the current buffer's target against the deployed file",
+    desc = "preview the current template diffed against the deployed file",
     run = function()
-      local target = buf_target(0)
-      if not target then
-        -- Source state that deploys nowhere (.chezmoitemplates/,
-        -- .chezmoiscripts/, .chezmoiignore) has no file of its own to compare
-        -- against. Whole-tree diffs are a git question; git tooling answers it.
+      -- Source state that deploys nowhere (.chezmoitemplates/,
+      -- .chezmoiscripts/, .chezmoiignore) has no file of its own to compare
+      -- against. Whole-tree diffs are a git question; git tooling answers it.
+      if vim.bo.filetype == "gotmpl" and not buf_target(vim.api.nvim_get_current_buf()) then
         return notify("buffer has no chezmoi target", vim.log.levels.WARN)
       end
-      diff_target(target)
+      preview_toggle(true)
     end,
   },
 
@@ -455,7 +486,9 @@ local subcommands = {
 
   preview = {
     desc = "toggle rendered preview of the current template (updates live as you type)",
-    run = preview_toggle,
+    run = function()
+      preview_toggle()
+    end,
   },
 
   pick = {

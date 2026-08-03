@@ -1019,15 +1019,29 @@ end
 -- against, and whole-tree diffs are a git question
 do
   clear_notes()
+  local prev_target = fake["target-path"]
+  fake["target-path"] = { code = 1, stdout = "", stderr = "not managed" }
+  resolve.invalidate()
   local nb = vim.api.nvim_create_buf(true, false)
   vim.api.nvim_buf_set_name(nb, SRC .. "/.chezmoitemplates/shared.md")
+  vim.bo[nb].filetype = "gotmpl"
   vim.api.nvim_set_current_buf(nb)
   vim.cmd("Chezmoi diff")
   eq("targetless buffer refuses to diff", has_note("buffer has no chezmoi target"), true)
+
+  -- and a buffer that is not a template at all is refused before any of that
+  clear_notes()
+  local plain = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_set_current_buf(plain)
+  vim.cmd("Chezmoi diff")
+  eq("non-template buffer refuses to diff", has_note("not a chezmoi template buffer"), true)
+
+  fake["target-path"] = prev_target
+  resolve.invalidate()
 end
 
--- a buffer with a target diffs against the deployed file in Neovim's own diff
--- engine instead of parsing chezmoi's textual output
+-- preview.diff: a second pane holds the deployed file and the render is diffed
+-- against it, so the preview shows what the edit changes out there
 do
   local deployed = vim.fs.normalize(vim.fn.getcwd()) .. "/chezmoi-test-diffme"
   local df = assert(io.open(deployed, "w"))
@@ -1036,45 +1050,92 @@ do
 
   local db = vim.api.nvim_create_buf(true, false)
   vim.api.nvim_buf_set_name(db, SRC .. "/dot_chezmoi-test-diffme.tmpl")
-  vim.api.nvim_set_current_buf(db)
   local prev_target, prev_managed = fake["target-path"], fake["managed"]
   fake["target-path"] = { code = 0, stdout = deployed .. "\n" }
   fake["managed"] = { code = 0, stdout = SRC .. "/dot_chezmoi-test-diffme.tmpl\n" }
   resolve.invalidate()
+  resolve.seed(db, "zsh")
+  vim.bo[db].filetype = "gotmpl"
 
-  local tabs_before = #vim.api.nvim_list_tabpages()
-  fake["cat"] = { code = 0, stdout = "one\nCHANGED\n" }
-  vim.cmd("Chezmoi diff")
-  eq("target diff opens its own tab", #vim.api.nvim_list_tabpages(), tabs_before + 1)
-  local wins = vim.api.nvim_tabpage_list_wins(0)
-  eq("target diff shows both sides", #wins, 2)
-  eq("both sides are in diff mode", vim.wo[wins[1]].diff and vim.wo[wins[2]].diff, true)
-  local sides = {
-    vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(wins[1])),
-    vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(wins[2])),
-  }
-  eq("left side is what is deployed", sides[1]:find("chezmoi-diff://deployed/", 1, true) ~= nil, true)
-  eq("right side is the chezmoi target state", sides[2]:find("chezmoi-diff://target/", 1, true) ~= nil, true)
-  eq(
-    "target state comes from chezmoi cat",
-    vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(wins[2]), 0, -1, false),
-    { "one", "CHANGED" }
-  )
-  vim.api.nvim_feedkeys("q", "x", false)
-  eq("q closes the whole diff tab", #vim.api.nvim_list_tabpages(), tabs_before)
-
-  -- identical states never open a tab
-  clear_notes()
-  fake["cat"] = { code = 0, stdout = "one\ntwo\n" }
+  vim.cmd("silent! only")
   vim.api.nvim_set_current_buf(db)
+  fake["execute-template"] = { code = 0, stdout = "one\nCHANGED\n" }
   vim.cmd("Chezmoi diff")
-  eq("identical target notifies instead of diffing", has_note("no differences"), true)
-  eq("identical target opens no tab", #vim.api.nvim_list_tabpages(), tabs_before)
+  local wins = vim.api.nvim_tabpage_list_wins(0)
+  eq("diff adds a deployed pane next to the render", #wins, 3)
+  eq("focus returns to the template", vim.api.nvim_get_current_buf(), db)
 
-  clear_notes()
-  fake["cat"] = { code = 1, stderr = "chezmoi: nope" }
-  vim.cmd("Chezmoi diff")
-  eq("failed cat reports instead of diffing", has_note("diff failed"), true)
+  -- nvim_buf_get_name hands back backslashes on Windows while the names are
+  -- built with "/" on both platforms. Not the bufname() helper: vim.fs.normalize
+  -- collapses the "://" in these pseudo-scheme names down to ":/".
+  local panes = {}
+  for _, w in ipairs(wins) do
+    local b = vim.api.nvim_win_get_buf(w)
+    panes[(vim.api.nvim_buf_get_name(b):gsub("\\", "/"))] = { win = w, buf = b }
+  end
+  local dep = panes["chezmoi-deployed://" .. deployed]
+  local ren = panes["chezmoi-preview://" .. deployed]
+  eq("deployed pane is named after the target", dep ~= nil, true)
+  eq("deployed pane holds what is on disk", vim.api.nvim_buf_get_lines(dep.buf, 0, -1, false), { "one", "two" })
+  eq("both panes are in diff mode", vim.wo[dep.win].diff and vim.wo[ren.win].diff, true)
+  eq("panes are labelled", vim.wo[dep.win].winbar:find("deployed", 1, true) ~= nil, true)
+
+  vim.wait(1000, function()
+    return vim.api.nvim_buf_get_lines(ren.buf, 0, -1, false)[2] == "CHANGED"
+  end)
+  eq("render pane holds the template output", vim.api.nvim_buf_get_lines(ren.buf, 0, -1, false), { "one", "CHANGED" })
+  eq(
+    "render pane keeps its label after a good render",
+    vim.wo[ren.win].winbar:find("will deploy", 1, true) ~= nil,
+    true
+  )
+
+  -- apply-on-save rewrites the deployed file underneath the preview
+  df = assert(io.open(deployed, "w"))
+  df:write("one\nCHANGED\n")
+  df:close()
+  fake["execute-template"] = { code = 0, stdout = "one\nCHANGED\nthree\n" }
+  vim.api.nvim_buf_set_lines(db, 0, -1, false, { "{{ .x }}" })
+  vim.api.nvim_exec_autocmds("TextChanged", { buffer = db })
+  vim.wait(1000, function()
+    return #vim.api.nvim_buf_get_lines(dep.buf, 0, -1, false) == 2
+      and vim.api.nvim_buf_get_lines(dep.buf, 0, -1, false)[2] == "CHANGED"
+  end)
+  eq("deployed pane re-reads on render", vim.api.nvim_buf_get_lines(dep.buf, 0, -1, false), { "one", "CHANGED" })
+
+  -- `q` from the deployed pane tears the whole preview down, not half of it
+  vim.api.nvim_set_current_win(dep.win)
+  vim.api.nvim_feedkeys("q", "x", false)
+  eq("q from the deployed pane closes the render too", vim.api.nvim_buf_is_valid(ren.buf), false)
+  eq("closing the preview wipes the deployed pane", vim.api.nvim_buf_is_valid(dep.buf), false)
+
+  -- plain :Chezmoi preview stays a single pane while preview.diff is off
+  vim.cmd("silent! only")
+  vim.api.nvim_set_current_buf(db)
+  vim.cmd("Chezmoi preview")
+  eq("preview.diff off keeps one pane", #vim.api.nvim_tabpage_list_wins(0), 2)
+  vim.cmd("Chezmoi preview")
+
+  -- and opts in without the command when the option is set
+  ct.config.preview.diff = true
+  vim.api.nvim_set_current_buf(db)
+  vim.cmd("Chezmoi preview")
+  eq("preview.diff on adds the pane", #vim.api.nvim_tabpage_list_wins(0), 3)
+  vim.cmd("Chezmoi preview")
+  ct.config.preview.diff = false
+
+  -- a template with no deploy target renders without a second pane rather
+  -- than refusing: .chezmoitemplates/, .chezmoiscripts/, an unapplied file
+  fake["target-path"] = { code = 1, stdout = "", stderr = "not managed" }
+  resolve.invalidate()
+  local nt = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_buf_set_name(nt, SRC .. "/dot_chezmoi-test-untargeted.tmpl")
+  vim.bo[nt].filetype = "gotmpl"
+  vim.cmd("silent! only")
+  vim.api.nvim_set_current_buf(nt)
+  vim.cmd("Chezmoi preview")
+  eq("targetless template previews without a deployed pane", #vim.api.nvim_tabpage_list_wins(0), 2)
+  vim.cmd("Chezmoi preview")
 
   vim.fn.delete(deployed)
   fake["target-path"], fake["managed"] = prev_target, prev_managed
