@@ -12,9 +12,10 @@ CONTENTS                                            *chezmoi-template-contents*
   4. Commands ............................. |chezmoi-template-commands|
   5. Completion ........................... |chezmoi-template-completion|
   6. Picker ............................... |chezmoi-template-picker|
-  7. Lua API .............................. |chezmoi-template-api|
-  8. Secrets .............................. |chezmoi-template-secrets|
-  9. Health ............................... |chezmoi-template-health|
+  7. Keymaps .............................. |chezmoi-template-keymaps|
+  8. Lua API .............................. |chezmoi-template-api|
+  9. Secrets .............................. |chezmoi-template-secrets|
+ 10. Health ............................... |chezmoi-template-health|
 
 ==============================================================================
 1. INTRODUCTION                                 *chezmoi-template-introduction*
@@ -35,7 +36,8 @@ source files, so you edit them natively instead of going through
 - Optional transparent decrypt/encrypt of chezmoi-managed encrypted files
   (*.age, *.asc).
 - Template errors surface as |vim.diagnostic| entries on write.
-- User commands for apply/diff/preview/source-jumping.
+- User commands for apply/preview/source-jumping, and |gf| on a
+  `{{ template "…" }}` name opens the file in `.chezmoitemplates/`.
 
 Everything degrades gracefully when the `chezmoi` binary is missing.
 
@@ -99,6 +101,7 @@ Defaults: >lua
       slow_ms = 500,             -- renders slower than this pause live
                                  -- preview to on-write; 0 disables
       split = "vertical",        -- "vertical"|"horizontal" preview window
+      diff = false,              -- mark the render against the deployed file
     },
     notify_on_open = false,      -- notify when opening a managed source file
     redirect = false,            -- deployed file open -> jump to source
@@ -115,6 +118,11 @@ Defaults: >lua
       exclude = {},              -- lua patterns (vs the source-relative
                                  -- path) hidden on top of the built-in
                                  -- internals list; false = show everything
+    },
+    keymaps = {
+      enabled = false,           -- buffer-local bindings in source buffers
+      prefix = "<localleader>c", -- see |chezmoi-template-keymaps|
+      icon = nil,                -- glyph for the which-key group
     },
     encryption = {
       enabled = false,           -- opt-in; delegates to chezmoi decrypt/encrypt
@@ -170,11 +178,6 @@ encryption.exclude lua patterns leave matching paths as plain binary.
                       `:Chezmoi! apply` to deploy the effect of such an edit, or
                       `chezmoi init` to regenerate the config.
 
-                                                              *:Chezmoi-diff*
-:Chezmoi diff         Diff for the current buffer's target in a split; the
-                      whole state when the buffer is not chezmoi-managed.
-                      `q` closes the split.
-
                                                             *:Chezmoi-target*
 :Chezmoi target       Echo the current buffer's deploy target path.
 :Chezmoi! target      Open the deployed file.
@@ -204,6 +207,27 @@ encryption.exclude lua patterns leave matching paths as plain binary.
                       running the command again) closes it. Refuses
                       non-template buffers. NOTE: templates calling secret
                       managers render real secrets here.
+
+                      With preview.diff the render is marked up against the
+                      file currently deployed, in the preview buffer itself:
+                      added and changed lines take a |hl-DiffAdd| highlight,
+                      and lines the edit removes come back as |hl-DiffDelete|
+                      virtual lines. Still one window. The deployed file is
+                      re-read on every render, so an apply landing underneath
+                      shows up. A template with no deploy target
+                      (`.chezmoitemplates/`, an unapplied file) previews
+                      unmarked.
+
+                      The winbar reports anything a reader would otherwise
+                      mistake for normal: the render being stale, live updates
+                      being paused, and what the marks compare against.
+
+                      Writing a file under `.chezmoitemplates/` also re-renders
+                      every open preview, so a source that is a bare
+                      `{{ template "…" . }}` passthrough still previews what it
+                      pulls in. That happens on write rather than per
+                      keystroke: chezmoi reads those files from disk, so an
+                      unwritten edit does not exist as far as it is concerned.
 
                                                               *:Chezmoi-pick*
 :Chezmoi pick         File picker over the source directory. Backend from
@@ -254,7 +278,37 @@ backends:
   encryption.enabled is on, typed as their deployed target.
 
 ==============================================================================
-7. LUA API                                               *chezmoi-template-api*
+7. KEYMAPS                                           *chezmoi-template-keymaps*
+
+Two things are set on every chezmoi source buffer, both buffer-local.
+
+'includeexpr' is pointed at the plugin unless the buffer already has one, so
+|gf| on the name in `{{ template "part.tmpl" . }}` (or `includeTemplate`) opens
+`.chezmoitemplates/part.tmpl`. Those files sit in the source root, nowhere near
+the file including them, so plain |gf| never finds them. A name that matches no
+such file is left alone and |gf| behaves as usual.
+
+keymaps.enabled (default false) adds bindings under keymaps.prefix (default
+`<localleader>c`). No global keys are ever set, so a default prefix cannot
+collide with anything outside a source buffer.
+
+    <prefix>p     toggle the preview
+    <prefix>a     apply this buffer's target
+    <prefix>t     open the deployed file
+    <prefix>s     jump to the source
+    <prefix>e     leave `:Chezmoi edit ` on the cmdline
+    <prefix>f     pick a source file
+
+With which-key.nvim loaded the same keys register as a `chezmoi` group, each
+with an icon, and the preview entry reports the split's current state
+("Preview" or "Close Preview") with a toggle icon to match. keymaps.icon
+replaces the group's glyph: >lua
+
+  keymaps = { enabled = true, icon = "" }
+<
+
+==============================================================================
+8. LUA API                                               *chezmoi-template-api*
 
 For statuslines, custom pickers, or scripts.
 
@@ -268,6 +322,17 @@ edit({target})                                    *chezmoi-template.edit()*
     programmatic form of :Chezmoi edit: >lua
       require("chezmoi-template").edit("~/.zshrc")
 <
+commands.preview_is_open({buf})    *chezmoi-template.commands.preview_is_open()*
+    Whether a preview split is open for {buf} (0 or nil = current buffer).
+    For a statusline, or a which-key desc/icon function that labels the
+    toggle with its state: >lua
+      require("chezmoi-template.commands").preview_is_open(0)
+<
+commands.includeexpr({fname})        *chezmoi-template.commands.includeexpr()*
+    Resolve {fname} against `.chezmoitemplates/`, returning it unchanged when
+    it names no file there. Set as 'includeexpr' on managed buffers; call it
+    directly only to reproduce that wiring elsewhere.
+
 icons.attach()                            *chezmoi-template.icons.attach()*
     Wrap MiniIcons.get() so chezmoi source names resolve to their deployed
     targets. Runs automatically; call it explicitly from a lazy-loaded
@@ -281,7 +346,7 @@ icons.get({path})                            *chezmoi-template.icons.get()*
         require("chezmoi-template.icons").get(vim.api.nvim_buf_get_name(0))
 <
 ==============================================================================
-8. SECRETS                                           *chezmoi-template-secrets*
+9. SECRETS                                           *chezmoi-template-secrets*
 
 What the plugin does by itself:
 
@@ -304,7 +369,7 @@ What to know:
   patterns.
 
 ==============================================================================
-9. HEALTH                                             *chezmoi-template-health*
+10. HEALTH                                             *chezmoi-template-health*
 
 `:checkhealth chezmoi-template` verifies the chezmoi binary, the gotmpl
 treesitter parser, conform.nvim, and the encryption setup.

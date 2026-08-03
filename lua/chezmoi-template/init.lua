@@ -26,6 +26,7 @@ local M = {}
 ---@field debounce? integer ms of idle before a live re-render
 ---@field slow_ms? integer a render slower than this pauses live preview to on-write; 0 disables
 ---@field split? "vertical"|"horizontal" preview window orientation
+---@field diff? boolean mark the render against the file currently deployed
 
 ---@class chezmoi-template.Config.diagnostics
 ---@field enabled? boolean surface template errors as diagnostics on write
@@ -37,6 +38,11 @@ local M = {}
 ---@field backend? "snacks"|"telescope"|"fzf-lua"|"mini"|"select" nil = auto-detect among loaded pickers
 ---@field display? "target"|"source" entry labels: deployed names (.zshrc) or raw source names (dot_zshrc.tmpl)
 ---@field exclude? string[]|false lua patterns (vs the source-relative path) hidden on top of the built-in internals list; false = show everything
+
+---@class chezmoi-template.Config.keymaps
+---@field enabled? boolean buffer-local `:Chezmoi` bindings in chezmoi source buffers
+---@field prefix? string lhs the bindings hang off
+---@field icon? string glyph for the which-key group; nil = a built-in default
 
 ---@class chezmoi-template.Config.encryption
 ---@field enabled? boolean transparent decrypt/encrypt of chezmoi-managed encrypted files (*.age, *.asc)
@@ -54,6 +60,7 @@ local M = {}
 ---@field diagnostics? chezmoi-template.Config.diagnostics
 ---@field completion? chezmoi-template.Config.completion
 ---@field picker? chezmoi-template.Config.picker|string a backend-name string is shorthand for { backend = ... }
+---@field keymaps? chezmoi-template.Config.keymaps
 ---@field encryption? chezmoi-template.Config.encryption
 
 ---@type chezmoi-template.Config
@@ -83,7 +90,9 @@ M.config = {
   -- render until it parses again. slow_ms: if a render takes longer than this,
   -- live pauses to on-write (guards heavy secret-manager templates); 0 disables.
   -- split: "vertical" | "horizontal" preview window orientation
-  preview = { live = true, debounce = 150, slow_ms = 500, split = "vertical" },
+  -- diff: mark the render against the file currently deployed, so the preview
+  -- shows what the edit changes out there, not only what it renders
+  preview = { live = true, debounce = 150, slow_ms = 500, split = "vertical", diff = false },
   -- notify when opening a chezmoi-managed source file (à la chezmoi.nvim)
   notify_on_open = false,
   -- opening a deployed managed file jumps to its chezmoi source (opt-in)
@@ -108,6 +117,15 @@ M.config = {
     -- .chezmoiversion, .chezmoiroot, .chezmoidata.*); false = show everything
     exclude = {},
   },
+  -- buffer-local bindings in chezmoi source buffers (opt-in): p preview,
+  -- a apply, d diff, t open target, s open source, e edit, f pick. Registers a
+  -- which-key group with the same keys when which-key is loaded.
+  keymaps = {
+    enabled = false,
+    prefix = "<localleader>c",
+    -- glyph for the which-key group; nil = a built-in Nerd Font home icon
+    icon = nil,
+  },
   -- transparent decrypt/encrypt of chezmoi-managed encrypted files (*.age, *.asc)
   -- via `chezmoi decrypt` / `chezmoi encrypt` (age/rage/builtin/gpg, identities,
   -- recipients all come from chezmoi's own encryption config)
@@ -119,7 +137,7 @@ M.config = {
 
 -- Static subcommand names for pre-activation tab-completion; the real command
 -- (commands.lua) derives its own from the handler table. Kept in sync by hand.
-local SUBCOMMANDS = { "apply", "diff", "edit", "pick", "preview", "source", "target" }
+local SUBCOMMANDS = { "apply", "edit", "pick", "preview", "source", "target" }
 
 -- setup() is cheap: it only registers filetype detection, the treesitter
 -- injection directive, and light triggers. The heavy work (module requires,

@@ -552,6 +552,11 @@ vim.system = function(cmd, _, cb)
   spawns[key] = (spawns[key] or 0) + 1
   sent[key] = cmd
   local ret = vim.deepcopy(fake[key] or { code = 1, stdout = "", stderr = "no fake for " .. key })
+  -- a canned reply can take its time, for the paths that react to a slow spawn
+  if ret.delay_ms then
+    (vim.uv or vim.loop).sleep(ret.delay_ms)
+    ret.delay_ms = nil
+  end
   if cb then
     cb(ret)
   end
@@ -878,9 +883,33 @@ do
   end)
   eq("preview keeps last valid render on error", vim.api.nvim_buf_get_lines(dest, 0, -1, false), { "re-rendered" })
 
+  -- a source can be a bare passthrough to .chezmoitemplates/, whose content
+  -- execute-template reads from disk — so those files drive the preview too,
+  -- on write (nothing is on disk to render until then)
+  fake["execute-template"] = { code = 0, stdout = "from template\n" }
+  vim.api.nvim_exec_autocmds("BufWritePost", { pattern = SRC .. "/.chezmoitemplates/part.tmpl" })
+  vim.wait(1000, function()
+    return vim.api.nvim_buf_get_lines(dest, 0, -1, false)[1] == "from template"
+  end)
+  eq("template write re-renders the preview", vim.api.nvim_buf_get_lines(dest, 0, -1, false), { "from template" })
+
+  local otick = vim.api.nvim_buf_get_changedtick(dest)
+  fake["execute-template"] = { code = 0, stdout = "unrelated\n" }
+  vim.api.nvim_exec_autocmds("BufWritePost", { pattern = SRC .. "/dot_elsewhere.tmpl" })
+  vim.wait(300, function()
+    return false
+  end)
+  eq("write outside .chezmoitemplates leaves the preview alone", vim.api.nvim_buf_get_changedtick(dest), otick)
+
   vim.api.nvim_set_current_buf(tb)
   vim.cmd("Chezmoi preview")
   eq("preview toggles closed", vim.api.nvim_buf_is_valid(dest), false)
+
+  -- with the preview gone the template watcher drops itself instead of
+  -- rendering into a dead buffer
+  fake["execute-template"] = { code = 0, stdout = "orphaned\n" }
+  vim.api.nvim_exec_autocmds("BufWritePost", { pattern = SRC .. "/.chezmoitemplates/part.tmpl" })
+  eq("template watcher survives a closed preview", vim.api.nvim_buf_is_valid(dest), false)
 
   -- preview.split = "horizontal" opens a horizontal split instead
   ct.config.preview.split = "horizontal"
@@ -897,20 +926,235 @@ do
   eq("preview refuses non-template buffers", has_note("not a chezmoi template buffer"), true)
 end
 
--- :Chezmoi diff opens a diff split; `q` closes it; empty diff only notifies
+-- gf follows a {{ template "name" }} argument into .chezmoitemplates/, and the
+-- opt-in buffer-local keymaps ride the same managed-buffer autocmd
 do
-  fake["diff"] = { code = 0, stdout = "diff --git a/x b/x\n+new\n" }
-  vim.cmd("Chezmoi diff")
-  local dbuf = vim.api.nvim_get_current_buf()
-  eq("diff split content", vim.api.nvim_buf_get_lines(dbuf, 0, 1, false)[1], "diff --git a/x b/x")
-  eq("diff split filetype", vim.bo[dbuf].filetype, "diff")
-  vim.api.nvim_feedkeys("q", "x", false)
-  eq("q closes the diff split", vim.api.nvim_buf_is_valid(dbuf), false)
+  local commands = require("chezmoi-template.commands")
+  vim.fn.mkdir(SRC .. "/.chezmoitemplates/sub", "p")
+  local pf = assert(io.open(SRC .. "/.chezmoitemplates/part.tmpl", "w"))
+  pf:write("hi\n")
+  pf:close()
 
+  eq("includeexpr resolves a template name", commands.includeexpr("part.tmpl"), SRC .. "/.chezmoitemplates/part.tmpl")
+  eq("includeexpr leaves unknown names alone", commands.includeexpr("nope.tmpl"), "nope.tmpl")
+  eq("includeexpr ignores directories", commands.includeexpr("sub"), "sub")
+
+  local real_source_dir = resolve.source_dir
+  ---@diagnostic disable-next-line: duplicate-set-field
+  resolve.source_dir = function()
+    return nil
+  end
+  eq("includeexpr is a no-op without a source dir", commands.includeexpr("part.tmpl"), "part.tmpl")
+  resolve.source_dir = real_source_dir
+
+  -- 'includeexpr' is set per managed buffer, never on foreign ones, and never
+  -- over a value someone else already owns
+  local ib = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_buf_set_name(ib, SRC .. "/dot_include.tmpl")
+  vim.api.nvim_exec_autocmds("BufReadPost", { buffer = ib })
+  eq("managed buffer gets includeexpr", vim.bo[ib].includeexpr:find("commands", 1, true) ~= nil, true)
+  eq("keymaps stay off by default", #vim.api.nvim_buf_get_keymap(ib, "n"), 0)
+
+  local ub = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_buf_set_name(ub, vim.fs.normalize(vim.fn.getcwd()) .. "/chezmoi-test-outside.tmpl")
+  vim.api.nvim_exec_autocmds("BufReadPost", { buffer = ub })
+  eq("unmanaged buffer keeps its includeexpr", vim.bo[ub].includeexpr, "")
+
+  local kb = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_buf_set_name(kb, SRC .. "/dot_keep.tmpl")
+  vim.bo[kb].includeexpr = "MyOwn(v:fname)"
+  vim.api.nvim_exec_autocmds("BufReadPost", { buffer = kb })
+  eq("existing includeexpr is left alone", vim.bo[kb].includeexpr, "MyOwn(v:fname)")
+
+  -- keymaps + the which-key group, whose preview entry reports live state
+  ct.config.keymaps.enabled = true
+  ct.config.keymaps.prefix = ",z"
+  local wk_spec
+  package.loaded["which-key"] = {
+    add = function(s)
+      wk_spec = s
+    end,
+  }
+  local wb = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_buf_set_name(wb, SRC .. "/dot_wk.tmpl")
+  vim.api.nvim_exec_autocmds("BufReadPost", { buffer = wb })
+  local maps = {}
+  for _, m in ipairs(vim.api.nvim_buf_get_keymap(wb, "n")) do
+    maps[m.lhs] = m.rhs
+  end
+  eq("keymaps.enabled binds the prefix", maps[",zp"], "<Cmd>Chezmoi preview<CR>")
+  eq("keymaps cover every subcommand", vim.tbl_count(maps), 6)
+  eq("which-key gets a chezmoi group", wk_spec[1].group, "chezmoi")
+  -- glyphs are built from codepoints: a literal Nerd Font character in the
+  -- source is one lossy copy/paste away from a silently blank icon
+  eq("group falls back to the built-in glyph", wk_spec[1].icon.icon, vim.fn.nr2char(0xf015) .. " ")
+  eq("every entry carries an icon", wk_spec[3].icon ~= nil and wk_spec[6].icon ~= nil, true)
+  eq("which-key entries are buffer-scoped", wk_spec[2].buffer, wb)
+  eq("which-key keeps static descs", wk_spec[3].desc, "Apply")
+  eq("preview desc reflects the closed state", wk_spec[2].desc(), "Preview")
+  eq("preview icon reflects the closed state", wk_spec[2].icon().color, "yellow")
+
+  fake["execute-template"] = { code = 0, stdout = "wk\n" }
+  resolve.seed(wb, "zsh")
+  vim.bo[wb].filetype = "gotmpl"
+  vim.api.nvim_set_current_buf(wb)
+  vim.cmd("Chezmoi preview")
+  eq("preview_is_open true while the split lives", commands.preview_is_open(wb), true)
+  eq("preview_is_open defaults to the current buffer", commands.preview_is_open(), true)
+  eq("preview desc reflects the open state", wk_spec[2].desc(), "Close Preview")
+  eq("preview icon reflects the open state", wk_spec[2].icon().color, "green")
+  vim.cmd("Chezmoi preview")
+  eq("preview_is_open false once closed", commands.preview_is_open(wb), false)
+
+  ct.config.keymaps.icon = "@"
+  local ob2 = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_buf_set_name(ob2, SRC .. "/dot_wk2.tmpl")
+  vim.api.nvim_exec_autocmds("BufReadPost", { buffer = ob2 })
+  eq("keymaps.icon overrides the group glyph", wk_spec[1].icon.icon, "@")
+  ct.config.keymaps.icon = nil
+
+  package.loaded["which-key"] = nil
+  ct.config.keymaps.enabled = false
+  ct.config.keymaps.prefix = "<localleader>c"
+  vim.fn.delete(SRC .. "/.chezmoitemplates", "rf")
+end
+
+-- preview.diff marks the render against the deployed file in place: added and
+-- changed lines highlighted, deleted lines back as virtual lines. One window,
+-- no second buffer to keep in step.
+do
+  local deployed = vim.fs.normalize(vim.fn.getcwd()) .. "/chezmoi-test-diffme"
+  local df = assert(io.open(deployed, "w"))
+  df:write("one\ntwo\nthree\n")
+  df:close()
+
+  local db = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_buf_set_name(db, SRC .. "/dot_chezmoi-test-diffme.tmpl")
+  local prev_target, prev_managed = fake["target-path"], fake["managed"]
+  fake["target-path"] = { code = 0, stdout = deployed .. "\n" }
+  fake["managed"] = { code = 0, stdout = SRC .. "/dot_chezmoi-test-diffme.tmpl\n" }
+  resolve.invalidate()
+  resolve.seed(db, "zsh")
+  vim.bo[db].filetype = "gotmpl"
+
+  local ns = vim.api.nvim_create_namespace("chezmoi-template.preview-diff")
+  local function marks(buf)
+    return vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })
+  end
+  local function preview_buf()
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_get_name(b):find("chezmoi%-preview://") and vim.api.nvim_buf_is_valid(b) then
+        return b
+      end
+    end
+  end
+
+  -- a line added by the render, one changed, one left alone
+  ct.config.preview.diff = true
+  vim.cmd("silent! only")
+  vim.api.nvim_set_current_buf(db)
+  fake["execute-template"] = { code = 0, stdout = "one\nCHANGED\nthree\nfour\n" }
+  vim.cmd("Chezmoi preview")
+  eq("diff stays in one preview window", #vim.api.nvim_tabpage_list_wins(0), 2)
+  eq("focus returns to the template", vim.api.nvim_get_current_buf(), db)
+  local dest = preview_buf()
+  vim.wait(1000, function()
+    return #marks(dest) > 0
+  end)
+  local added = {}
+  for _, m in ipairs(marks(dest)) do
+    if m[4].line_hl_group == "DiffAdd" then
+      added[#added + 1] = m[2]
+    end
+  end
+  table.sort(added)
+  eq("changed and added lines are highlighted", added, { 1, 3 })
+  eq("unchanged lines are left alone", #marks(dest), 3) -- 2 adds + 1 deletion
+
+  local virt
+  for _, m in ipairs(marks(dest)) do
+    virt = virt or m[4].virt_lines
+  end
+  eq("the replaced line comes back as a virtual line", virt and virt[1][1][1], "two")
+  eq("deleted text is marked as such", virt and virt[1][1][2], "DiffDelete")
+
+  -- apply-on-save rewrites the deployed file underneath the preview: the marks
+  -- have to follow, or they report changes that already landed
+  df = assert(io.open(deployed, "w"))
+  df:write("one\nCHANGED\nthree\nfour\n")
+  df:close()
+  vim.api.nvim_buf_set_lines(db, 0, -1, false, { "{{ .x }}" })
+  vim.api.nvim_exec_autocmds("TextChanged", { buffer = db })
+  vim.wait(1000, function()
+    return #marks(dest) == 0
+  end)
+  eq("marks clear once the deployed file catches up", #marks(dest), 0)
+
+  eq("diff labels the pane", vim.wo[vim.fn.bufwinid(dest)].winbar:find("vs deployed", 1, true) ~= nil, true)
+  vim.cmd("Chezmoi preview") -- toggle closed
+
+  -- a render slower than slow_ms drops live to on-write. The notification says
+  -- so once; the winbar keeps saying so, since the condition holds until the
+  -- preview is reopened.
   clear_notes()
-  fake["diff"] = { code = 0, stdout = "  \n" }
-  vim.cmd("Chezmoi diff")
-  eq("empty diff notifies instead of splitting", has_note("no differences"), true)
+  ct.config.preview.slow_ms = 20
+  fake["execute-template"] = { code = 0, stdout = "slow\n", delay_ms = 40 }
+  vim.cmd("silent! only")
+  vim.api.nvim_set_current_buf(db)
+  vim.cmd("Chezmoi preview")
+  dest = preview_buf()
+  vim.wait(1000, function()
+    return has_note("live preview paused")
+  end)
+  eq("a slow render pauses live updates", has_note("live preview paused"), true)
+  eq(
+    "the paused state stays in the winbar",
+    vim.wo[vim.fn.bufwinid(dest)].winbar:find("on write", 1, true) ~= nil,
+    true
+  )
+  vim.cmd("Chezmoi preview")
+  ct.config.preview.slow_ms = 500
+
+  -- preview.live = false says the same thing from the start
+  ct.config.preview.live = false
+  vim.api.nvim_set_current_buf(db)
+  vim.cmd("Chezmoi preview")
+  dest = preview_buf()
+  eq("preview.live off is labelled too", vim.wo[vim.fn.bufwinid(dest)].winbar:find("on write", 1, true) ~= nil, true)
+  vim.cmd("Chezmoi preview")
+  ct.config.preview.live = true
+
+  -- preview.diff off marks nothing
+  ct.config.preview.diff = false
+  vim.cmd("silent! only")
+  vim.api.nvim_set_current_buf(db)
+  fake["execute-template"] = { code = 0, stdout = "totally\ndifferent\n" }
+  vim.cmd("Chezmoi preview")
+  dest = preview_buf()
+  vim.wait(500, function()
+    return false
+  end)
+  eq("preview.diff off marks nothing", #marks(dest), 0)
+  eq("preview.diff off leaves the winbar bare", vim.wo[vim.fn.bufwinid(dest)].winbar, "")
+  vim.cmd("Chezmoi preview")
+
+  -- a template with no deploy target has nothing to mark against, and renders
+  -- anyway: .chezmoitemplates/, .chezmoiscripts/, an unapplied file
+  fake["target-path"] = { code = 1, stdout = "", stderr = "not managed" }
+  resolve.invalidate()
+  local nt = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_buf_set_name(nt, SRC .. "/dot_chezmoi-test-untargeted.tmpl")
+  vim.bo[nt].filetype = "gotmpl"
+  vim.cmd("silent! only")
+  vim.api.nvim_set_current_buf(nt)
+  vim.cmd("Chezmoi preview")
+  eq("targetless template still previews", preview_buf() ~= nil, true)
+  eq("targetless template marks nothing", #marks(preview_buf()), 0)
+  vim.cmd("Chezmoi preview")
+
+  vim.fn.delete(deployed)
+  fake["target-path"], fake["managed"] = prev_target, prev_managed
+  resolve.invalidate()
 end
 
 -- redirect: opening a deployed managed file jumps to its source

@@ -15,6 +15,25 @@ local function buf_target(buf)
   return resolve.target_path(file)
 end
 
+-- 'includeexpr' for managed buffers, so `gf` on a name inside
+-- {{ template "name" . }} or {{ includeTemplate "name" . }} opens the file it
+-- names. chezmoi reads those from .chezmoitemplates/ in the source root, which
+-- is nowhere near the including file, so plain `gf` never finds them. Quotes
+-- are not in 'isfname', so v:fname already arrives as the bare name.
+-- Returns fname untouched when it names nothing, leaving `gf` its own behaviour.
+function M.includeexpr(fname)
+  local dir = resolve.source_dir()
+  if not dir then
+    return fname
+  end
+  local path = dir .. ".chezmoitemplates/" .. fname
+  local stat = uv.fs_stat(path)
+  if stat and stat.type == "file" then
+    return path
+  end
+  return fname
+end
+
 -- chezmoi apply, whole state or a single target (async)
 local function apply(target)
   local args = { "apply" }
@@ -37,7 +56,7 @@ local function apply(target)
   end)
 end
 
--- `q` closes plugin-owned scratch splits (diff, preview)
+-- `q` closes the preview split
 local function map_close(buf)
   vim.keymap.set("n", "q", function()
     if vim.api.nvim_buf_is_valid(buf) then
@@ -46,26 +65,63 @@ local function map_close(buf)
   end, { buffer = buf, nowait = true, desc = "close chezmoi split" })
 end
 
-local function open_scratch_split(lines, ft)
-  vim.cmd("botright new")
-  local buf = vim.api.nvim_get_current_buf()
-  vim.bo[buf].buftype = "nofile"
-  vim.bo[buf].bufhidden = "wipe"
-  vim.bo[buf].swapfile = false
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.bo[buf].modifiable = false
-  if ft then
-    vim.bo[buf].filetype = ft
+-- Lines currently on disk at the deploy target. Missing file = everything the
+-- template renders reads as added, which is the truth.
+local function deployed_lines(target)
+  if not target or vim.fn.filereadable(target) ~= 1 then
+    return {}
   end
-  map_close(buf)
-  return buf
+  return vim.fn.readfile(target)
+end
+
+local diff_ns = vim.api.nvim_create_namespace("chezmoi-template.preview-diff")
+
+-- Mark up the preview against what is deployed, in the preview buffer itself.
+-- Neovim's diff engine needs a second window holding a second buffer, and
+-- keeping that buffer in step meant rewriting it on every render — a re-diff
+-- and a redraw of two windows per keystroke. vim.diff gives the same hunks
+-- with no window at all: added and changed lines take a DiffAdd line
+-- highlight, and deleted lines come back as DiffDelete virtual lines, so the
+-- render alone shows what the edit changes out there.
+local function mark_diff(dest, target, want)
+  vim.api.nvim_buf_clear_namespace(dest, diff_ns, 0, -1)
+  local have = deployed_lines(target)
+  local last = vim.api.nvim_buf_line_count(dest) - 1
+  -- vim.diff wants trailing newlines or it reports a phantom last-line change
+  local hunks =
+    vim.diff(table.concat(have, "\n") .. "\n", table.concat(want, "\n") .. "\n", { result_type = "indices" })
+  for _, h in ipairs(hunks) do
+    local start_a, count_a, start_b, count_b = h[1], h[2], h[3], h[4]
+    for row = start_b - 1, start_b + count_b - 2 do
+      if row >= 0 and row <= last then
+        vim.api.nvim_buf_set_extmark(dest, diff_ns, row, 0, { line_hl_group = "DiffAdd" })
+      end
+    end
+    if count_a > 0 then
+      local virt = {}
+      for i = start_a, start_a + count_a - 1 do
+        virt[#virt + 1] = { { have[i] or "", "DiffDelete" } }
+      end
+      -- count_b == 0 is a pure deletion: start_b is the line it sat after, so
+      -- the removed lines hang below it (or above line 1 when start_b is 0).
+      local above = count_b > 0 or start_b == 0
+      local row = math.min(math.max(start_b - 1, 0), math.max(last, 0))
+      if last >= 0 then
+        vim.api.nvim_buf_set_extmark(dest, diff_ns, row, 0, { virt_lines = virt, virt_lines_above = above })
+      end
+    end
+  end
 end
 
 -- :Chezmoi preview — render the current template via execute-template into a
 -- vsplit typed as the target filetype; re-renders live as you type (or on write
 -- when preview.live is false). Running it again closes the preview.
--- state: src buf -> { dest, timer, tick, rendering, pending, live, slow_ms,
---                     last_output, stale }
+-- With preview.diff the render is marked up against the deployed file in place,
+-- so it reads as "what this edit will change out there" rather than just "what
+-- this renders to" — the one comparison git tooling cannot make, since the
+-- deployed state is in no repository.
+-- state: src buf -> { dest, diff, target, winbar, timer, tick, rendering,
+--                     pending, live, slow_ms, last_output, stale }
 local preview_state = {}
 
 -- Freeing a preview's window handle + debounce timer, from either the toggle-off
@@ -80,9 +136,30 @@ local function preview_teardown(src)
   preview_state[src] = nil
 end
 
--- Flip the stale marker on the preview window's winbar. Shown when the template
--- fails to render so the frozen last-valid output doesn't read as current. Only
--- touches the window when the state actually changes.
+-- The preview's winbar: whatever the pane is called, plus any state a reader
+-- would otherwise mistake for normal. Both markers describe a condition that
+-- holds until something changes it, so they live here rather than in a
+-- notification that scrolls away seconds after the fact.
+local function refresh_winbar(st, dest)
+  local win = vim.fn.bufwinid(dest)
+  if win == -1 then
+    return
+  end
+  local parts = {}
+  if st and st.stale then
+    parts[#parts + 1] = "%#WarningMsg#⚠ stale (invalid template)%*"
+  end
+  if st and st.paused then
+    parts[#parts + 1] = "%#WarningMsg#⏸ updates on write%*"
+  end
+  if st and st.winbar ~= "" then
+    parts[#parts + 1] = st.winbar
+  end
+  vim.wo[win].winbar = table.concat(parts, "  ")
+end
+
+-- Flip the stale marker. Set when the template fails to render, so the frozen
+-- last-valid output doesn't read as current.
 local function set_stale(st, dest, stale)
   if st and st.stale == stale then
     return
@@ -90,25 +167,24 @@ local function set_stale(st, dest, stale)
   if st then
     st.stale = stale
   end
-  local win = vim.fn.bufwinid(dest)
-  if win ~= -1 then
-    vim.wo[win].winbar = stale and "%#WarningMsg#⚠ preview stale (invalid template)%*" or ""
-  end
+  refresh_winbar(st, dest)
 end
 
 -- Live re-rendering runs the whole template on every idle window; a template
 -- calling secret managers or the network can be slow. If a render blows past
 -- slow_ms, drop this preview to on-write so leaving it on can't hammer them.
-local function maybe_backoff(st, ms)
+local function maybe_backoff(st, dest, ms)
   if not st or not st.live or st.slow_ms <= 0 or ms <= st.slow_ms then
     return
   end
   st.live = false
+  st.paused = true
   if st.timer then
     st.timer:stop()
     st.timer:close()
     st.timer = nil
   end
+  refresh_winbar(st, dest)
   notify(string.format("live preview paused (slow template, %dms) — updates on write", ms), vim.log.levels.WARN)
 end
 
@@ -121,13 +197,17 @@ local function preview_render(src, dest)
     st.tick = vim.api.nvim_buf_get_changedtick(src)
   end
   resolve.execute_template(text, function(ret)
+    -- Time the spawn here, not inside the vim.schedule below: scheduling waits
+    -- on whatever else the editor is doing, and charging that to the template
+    -- lets one busy moment latch live preview off for the rest of the session.
+    local spawn_ms = (uv.hrtime() - t0) / 1e6
     vim.schedule(function()
       if st then
         st.rendering = false
         -- Only back off if this is still the active preview (not one torn down
         -- while its render was in flight).
         if preview_state[src] == st then
-          maybe_backoff(st, (uv.hrtime() - t0) / 1e6)
+          maybe_backoff(st, dest, spawn_ms)
         end
       end
       if not vim.api.nvim_buf_is_valid(dest) then
@@ -147,6 +227,14 @@ local function preview_render(src, dest)
           if st then
             st.last_output = ret.stdout
           end
+        end
+        -- Re-mark every render, even when the output is unchanged: apply-on-save
+        -- rewrites the deployed file underneath the preview, and marks against a
+        -- stale copy report changes that have already landed.
+        -- ponytail: one small readfile per render, riding along with the
+        -- execute-template spawn; cache on mtime if it ever shows up.
+        if st and st.diff then
+          mark_diff(dest, st.target, vim.api.nvim_buf_get_lines(dest, 0, -1, false))
         end
         set_stale(st, dest, false)
       else
@@ -210,6 +298,13 @@ local function preview_toggle()
 
   local cfg = require("chezmoi-template").config.preview
   local target_ft = vim.b[src].chezmoi_target_ft
+  local src_file = vim.api.nvim_buf_get_name(src)
+  local target = resolve.target_path(src_file)
+  -- Nothing deployed to compare against: .chezmoitemplates/, .chezmoiscripts/,
+  -- an unapplied new file. Render unmarked rather than refuse.
+  local diff = cfg.diff and target ~= nil
+  local src_win = vim.api.nvim_get_current_win()
+
   vim.cmd((cfg.split == "horizontal" and "" or "vertical ") .. "botright new")
   local dest = vim.api.nvim_get_current_buf()
   vim.bo[dest].buftype = "nofile"
@@ -218,18 +313,23 @@ local function preview_toggle()
   -- Named after the deploy target so statuslines/tabs show the rendered
   -- file's identity (dot_zshrc.tmpl previews as .zshrc); the protocol prefix
   -- keeps it distinct from the real target buffer and unique per source.
-  local src_file = vim.api.nvim_buf_get_name(src)
-  local target_name = resolve.target_path(src_file) or resolve.resolve_path(vim.fn.fnamemodify(src_file, ":t"))
+  local target_name = target or resolve.resolve_path(vim.fn.fnamemodify(src_file, ":t"))
   -- pcall: a second preview with the same target name would E95 on collision
   pcall(vim.api.nvim_buf_set_name, dest, "chezmoi-preview://" .. target_name)
   if target_ft and target_ft ~= "gotmpl" then
     vim.bo[dest].filetype = target_ft
   end
   map_close(dest)
-  vim.cmd.wincmd("p")
+  local base_winbar = diff and ("vs deployed  " .. vim.fn.fnamemodify(target, ":~")) or ""
+  if vim.api.nvim_win_is_valid(src_win) then
+    vim.api.nvim_set_current_win(src_win)
+  end
 
   local st = {
     dest = dest,
+    diff = diff,
+    target = target,
+    winbar = base_winbar,
     timer = cfg.live and uv.new_timer() or nil,
     tick = -1,
     rendering = false,
@@ -238,8 +338,12 @@ local function preview_toggle()
     slow_ms = cfg.slow_ms,
     last_output = nil,
     stale = false,
+    -- Configured off, not backed off, but a reader still needs to know why the
+    -- render is not keeping up with the keystrokes.
+    paused = not cfg.live,
   }
   preview_state[src] = st
+  refresh_winbar(st, dest)
 
   -- One autocmd on all three events: live edits debounce-render, and BufWritePost
   -- renders once live has been dropped to on-write (config or backoff), so the
@@ -262,6 +366,31 @@ local function preview_toggle()
     end,
   })
 
+  -- A source can be a bare passthrough to .chezmoitemplates/, in which case
+  -- every line worth previewing lives in a file this autocmd would otherwise
+  -- ignore. execute-template reads those from disk, so an unwritten edit is
+  -- invisible to chezmoi and there is nothing to render until the write —
+  -- unlike the source buffer, this cannot follow the keystrokes.
+  -- ponytail: any .chezmoitemplates write re-renders every open preview, no
+  -- dependency tracking. An unrelated write costs one spawn and the last_output
+  -- check above keeps the buffer untouched; parse the include names at toggle
+  -- time if that ever shows up in a profile.
+  vim.api.nvim_create_autocmd("BufWritePost", {
+    group = "chezmoi-template.commands",
+    callback = function(ev)
+      -- Path match, not an autocmd pattern: a raw ev.file is backslashed on
+      -- Windows and would dodge a "/"-style glob.
+      if not vim.fs.normalize(ev.file):find("/.chezmoitemplates/", 1, true) then
+        return
+      end
+      if not vim.api.nvim_buf_is_valid(dest) then
+        preview_teardown(src)
+        return true -- preview closed; drop the autocmd
+      end
+      preview_render(src, dest)
+    end,
+  })
+
   -- Closing the preview (q / :q) wipes dest — free the timer right away instead
   -- of waiting for the next keystroke to notice.
   vim.api.nvim_create_autocmd("BufWipeout", {
@@ -273,6 +402,16 @@ local function preview_toggle()
   })
 
   preview_render(src, dest)
+end
+
+-- Whether a preview split is open for a buffer. Public so a statusline or a
+-- which-key `desc`/`icon` function can label the toggle with its current state.
+function M.preview_is_open(buf)
+  if buf == nil or buf == 0 then
+    buf = vim.api.nvim_get_current_buf()
+  end
+  local st = preview_state[buf]
+  return st ~= nil and vim.api.nvim_buf_is_valid(st.dest)
 end
 
 -- obsidian.nvim-style single command: `:Chezmoi <sub>` dispatches to one of
@@ -289,26 +428,6 @@ local subcommands = {
         return notify("buffer has no chezmoi target (use :Chezmoi! apply for all)", vim.log.levels.WARN)
       end
       apply(target)
-    end,
-  },
-
-  diff = {
-    desc = "diff for current target (whole state on non-chezmoi buffers)",
-    run = function()
-      local target = buf_target(0)
-      local args = { "diff" }
-      if target then
-        table.insert(args, target)
-      end
-      local ret = resolve.chezmoi(args, { text = true }):wait()
-      if ret.code ~= 0 and (ret.stderr or "") ~= "" then
-        return notify("diff failed:\n" .. ret.stderr, vim.log.levels.ERROR)
-      end
-      local out = ret.stdout or ""
-      if vim.trim(out) == "" then
-        return notify("no differences" .. (target and " for " .. vim.fn.fnamemodify(target, ":~") or ""))
-      end
-      open_scratch_split(vim.split(out, "\n"), "diff")
     end,
   },
 
@@ -410,6 +529,90 @@ local function define_commands()
   })
 end
 
+-- Buffer-local bindings, off by default. A plugin claiming global keys collides
+-- with whatever already owns the prefix (LazyVim's chezmoi extra takes
+-- <leader>sz), but scoped to chezmoi source buffers a default prefix costs
+-- nothing elsewhere. `edit` takes a target, so it leaves the cmdline open.
+-- Nerd Font glyphs by codepoint. Pasting them literally into source is fragile:
+-- private-use characters do not survive every editor, terminal or patch tool,
+-- and a stripped glyph fails silently as a blank icon.
+local NF = {
+  home = 0xf015, -- the group
+  check = 0xf00c, -- apply
+  arrow_right = 0xf061, -- source -> deployed
+  arrow_left = 0xf060, -- deployed -> source
+  pencil = 0xf040, -- edit
+  search = 0xf002, -- pick
+  toggle_on = 0xf205, -- preview open (the pair snacks.nvim uses)
+  toggle_off = 0xf204, -- preview closed
+}
+
+local function icon(cp, color)
+  return { icon = vim.fn.nr2char(cp) .. " ", color = color }
+end
+
+local keymap_specs = {
+  { key = "p", rhs = "<cmd>Chezmoi preview<cr>", desc = "Preview" },
+  { key = "a", rhs = "<cmd>Chezmoi apply<cr>", desc = "Apply", icon = icon(NF.check, "green") },
+  { key = "t", rhs = "<cmd>Chezmoi! target<cr>", desc = "Open Target", icon = icon(NF.arrow_right, "orange") },
+  { key = "s", rhs = "<cmd>Chezmoi source<cr>", desc = "Open Source", icon = icon(NF.arrow_left, "blue") },
+  { key = "e", rhs = ":Chezmoi edit ", desc = "Edit Target", icon = icon(NF.pencil, "purple") },
+  { key = "f", rhs = "<cmd>Chezmoi pick<cr>", desc = "Find Source File", icon = icon(NF.search, "green") },
+}
+
+local function preview_label()
+  return M.preview_is_open(0) and "Close Preview" or "Preview"
+end
+
+local function preview_icon()
+  if M.preview_is_open(0) then
+    return icon(NF.toggle_on, "green")
+  end
+  return icon(NF.toggle_off, "yellow")
+end
+
+-- which-key evaluates a spec's desc/icon functions every time the popup opens,
+-- so the preview entry reports the split's current state without this plugin
+-- depending on which-key (or snacks) to provide a toggle abstraction.
+local function which_key_add(buf, prefix, group_icon)
+  local spec = {
+    {
+      prefix,
+      group = "chezmoi",
+      icon = group_icon and { icon = group_icon, color = "cyan" } or icon(NF.home, "cyan"),
+      buffer = buf,
+    },
+  }
+  for _, s in ipairs(keymap_specs) do
+    spec[#spec + 1] = {
+      prefix .. s.key,
+      buffer = buf,
+      desc = s.key == "p" and preview_label or s.desc,
+      icon = s.key == "p" and preview_icon or s.icon,
+    }
+  end
+  require("which-key").add(spec)
+end
+
+local function attach_buffer(buf, config)
+  -- `gf` only consults 'includeexpr' when the name is not a readable path as
+  -- written, so this costs nothing for ordinary paths. Never overwrite a value
+  -- the user or another plugin set.
+  if vim.bo[buf].includeexpr == "" then
+    vim.bo[buf].includeexpr = "v:lua.require'chezmoi-template.commands'.includeexpr(v:fname)"
+  end
+  if not config.keymaps.enabled then
+    return
+  end
+  local prefix = config.keymaps.prefix
+  for _, s in ipairs(keymap_specs) do
+    vim.keymap.set("n", prefix .. s.key, s.rhs, { buffer = buf, desc = "chezmoi: " .. s.desc })
+  end
+  if package.loaded["which-key"] then
+    which_key_add(buf, prefix, config.keymaps.icon)
+  end
+end
+
 -- Last chezmoi warning reported after a source-state write, so a standing one
 -- is not repeated on every save. nil = nothing outstanding.
 local last_warning
@@ -419,6 +622,22 @@ function M.setup()
   vim.api.nvim_create_augroup("chezmoi-template.commands", { clear = true })
   define_commands()
   last_warning = nil
+
+  vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
+    group = "chezmoi-template.commands",
+    callback = function(ctx)
+      if resolve.is_managed(ctx.file) then
+        attach_buffer(ctx.buf, config)
+      end
+    end,
+  })
+  -- Activation can come from a :Chezmoi command in an already-open source
+  -- buffer, whose BufReadPost is long past — that buffer would otherwise wait
+  -- for a reload to get its bindings.
+  local cur = vim.api.nvim_get_current_buf()
+  if resolve.is_managed(vim.api.nvim_buf_get_name(cur)) then
+    attach_buffer(cur, config)
+  end
 
   if config.apply.on_save then
     vim.api.nvim_create_autocmd("BufWritePost", {
