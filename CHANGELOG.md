@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.0.0](https://github.com/dpezto/chezmoi-template.nvim/compare/v2.0.0...v3.0.0) (2026-08-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* shared-template navigation, opt-in keymaps, preview diff ([#29](https://github.com/dpezto/chezmoi-template.nvim/issues/29))
+
+### Features
+
+* shared-template navigation, opt-in keymaps, preview diff ([#29](https://github.com/dpezto/chezmoi-template.nvim/issues/29)) ([be916f1](https://github.com/dpezto/chezmoi-template.nvim/commit/be916f150df24b80b018bde988e30a1e8e856c68))
+
 ## [2.0.0](https://github.com/dpezto/chezmoi-template.nvim/compare/v1.3.0...v2.0.0) (2026-07-27)
 
 
