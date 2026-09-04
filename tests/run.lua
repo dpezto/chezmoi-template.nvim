@@ -1177,6 +1177,24 @@ do
   eq("redirect edits the source path", vim.api.nvim_buf_get_name(0):find("dot_chezmoi%-test%-deployed$") ~= nil, true)
   eq("redirect wipes the target buffer", vim.api.nvim_buf_is_valid(rb), false)
 
+  -- :Chezmoi! target from the source is a deliberate open: no bounce back
+  vim.fn.writefile({ "deployed" }, deployed)
+  local prev_target, prev_managed = fake["target-path"], fake["managed"]
+  fake["target-path"] = { code = 0, stdout = deployed .. "\n" }
+  -- one stub serves both listings: the deployed path feeds managed_set, the
+  -- source path feeds source_set
+  fake["managed"] = { code = 0, stdout = deployed .. "\n" .. SRC .. "/dot_chezmoi-test-deployed\n" }
+  resolve.invalidate()
+  clear_notes()
+  vim.cmd("Chezmoi! target")
+  vim.wait(300)
+  eq("Chezmoi! target lands on the deployed file", bufname(0), deployed)
+  eq("Chezmoi! target is not redirected back", has_note("redirected to source"), false)
+  vim.api.nvim_buf_delete(0, { force = true })
+  vim.fn.delete(deployed)
+  fake["target-path"], fake["managed"] = prev_target, prev_managed
+  resolve.invalidate()
+
   -- a managed target loaded in the background (picker preview) has no window:
   -- leave it alone
   local hidden = vim.fs.normalize(vim.fn.getcwd()) .. "/chezmoi-test-hidden"

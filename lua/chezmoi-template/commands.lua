@@ -7,6 +7,10 @@ local uv = vim.uv or vim.loop
 
 local notify = require("chezmoi-template").notify
 
+-- Set while :Chezmoi! target opens the deployed file on purpose, so the
+-- redirect autocmd does not bounce it straight back to the source.
+local opening_target = false
+
 local function buf_target(buf)
   local file = vim.api.nvim_buf_get_name(buf or 0)
   if file == "" or not resolve.is_managed(file) then
@@ -439,7 +443,9 @@ local subcommands = {
         return notify("buffer has no chezmoi target", vim.log.levels.WARN)
       end
       if ctx.bang then
+        opening_target = true
         vim.cmd.edit(vim.fn.fnameescape(target))
+        opening_target = false
       else
         notify(vim.fn.fnamemodify(target, ":~"))
       end
@@ -698,7 +704,7 @@ function M.setup()
     vim.api.nvim_create_autocmd("BufReadPost", {
       group = "chezmoi-template.commands",
       callback = function(ctx)
-        if ctx.file == "" or vim.bo[ctx.buf].buftype ~= "" or resolve.is_managed(ctx.file) then
+        if opening_target or ctx.file == "" or vim.bo[ctx.buf].buftype ~= "" or resolve.is_managed(ctx.file) then
           return
         end
         local abs = vim.fs.normalize(vim.fn.fnamemodify(ctx.file, ":p"))
