@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.0.1](https://github.com/dpezto/chezmoi-template.nvim/compare/v3.0.0...v3.0.1) (2026-09-04)
+
+
+### Bug Fixes
+
+* **redirect:** keep :Chezmoi! target on the deployed file ([#33](https://github.com/dpezto/chezmoi-template.nvim/issues/33)) ([c0a4990](https://github.com/dpezto/chezmoi-template.nvim/commit/c0a49902b4873357f2b7c1657a15103723091a9c))
+
 ## [3.0.0](https://github.com/dpezto/chezmoi-template.nvim/compare/v2.0.0...v3.0.0) (2026-08-03)
 
 
