@@ -26,6 +26,8 @@ source files, so you edit them natively instead of going through
 
 - *.tmpl buffers are 'filetype' gotmpl with the deployed target language
   treesitter-injected (a dot_zshrc.tmpl highlights as Go template + zsh).
+  Plain managed sources get the deployed file's 'filetype' (dot_zshrc is
+  zsh, not conf).
 - A conform.nvim formatter formats templates with the TARGET filetype's
   formatter by masking Go-template spans and restoring them afterwards.
   Lines with no valid placeholder form (a template glued to a bare word, a

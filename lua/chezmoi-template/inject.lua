@@ -116,6 +116,37 @@ function M.setup()
       vim.bo[ctx.buf].filetype = "gotmpl"
     end,
   })
+
+  -- Plain (non-template) managed sources carry chezmoi attributes in their
+  -- name, so nvim detects dot_zshrc as conf (or nothing) instead of zsh. Retype
+  -- from the deployed path once the buffer is read. Templates are already
+  -- gotmpl by now; encrypted files are typed by encryption.lua after decryption.
+  vim.api.nvim_create_autocmd("BufReadPost", {
+    group = augroup("plain"),
+    pattern = "*",
+    callback = function(ctx)
+      local nfile = vim.fs.normalize(ctx.file)
+      if
+        ctx.file == ""
+        or vim.bo[ctx.buf].buftype ~= ""
+        or vim.bo[ctx.buf].filetype == "gotmpl"
+        or nfile:match("%.age$")
+        or nfile:match("%.asc$")
+        or not resolve.is_managed(ctx.file)
+      then
+        return
+      end
+      local target = resolve.target_path(ctx.file)
+      if not target then
+        return
+      end
+      local ft = vim.filetype.match({ filename = target, buf = ctx.buf })
+      if ft and ft ~= vim.bo[ctx.buf].filetype then
+        resolve.seed(ctx.buf, ft)
+        vim.bo[ctx.buf].filetype = ft
+      end
+    end,
+  })
 end
 
 return M

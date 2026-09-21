@@ -1437,6 +1437,36 @@ do
   vim.fn.delete(SRC .. "/.chezmoitemplates", "d")
 end
 
+-- inject autocmds: a plain (non-template) managed source is typed from its
+-- deployed path — dot_zshrc detects as conf or nothing on its own name
+do
+  local plain = SRC .. "/dot_plain_check"
+  local f = assert(io.open(plain, "w"))
+  f:write("# plain\nexport PLAIN=1\n")
+  f:close()
+  local prev_target, prev_managed = fake["target-path"], fake["managed"]
+  -- not in the managed listing (undeployed): no target, filetype untouched.
+  -- First, because a positive target_path mapping survives invalidate().
+  fake["managed"] = { code = 0, stdout = "" }
+  resolve.invalidate()
+  vim.cmd.edit(vim.fn.fnameescape(plain))
+  local b = vim.api.nvim_get_current_buf()
+  eq("undeployed plain file keeps its own filetype", vim.bo[b].filetype ~= "zsh", true)
+  vim.api.nvim_buf_delete(b, { force = true })
+
+  fake["managed"] = { code = 0, stdout = plain .. "\n" }
+  fake["target-path"] = { code = 0, stdout = SRC .. "/.zshrc\n" }
+  resolve.invalidate()
+  vim.cmd.edit(vim.fn.fnameescape(plain))
+  b = vim.api.nvim_get_current_buf()
+  eq("plain managed file typed as its target", vim.bo[b].filetype, "zsh")
+  eq("plain managed file seeds target ft", vim.b[b].chezmoi_target_ft, "zsh")
+  vim.api.nvim_buf_delete(b, { force = true })
+  os.remove(plain)
+  fake["target-path"], fake["managed"] = prev_target, prev_managed
+  resolve.invalidate()
+end
+
 -- picker: each plugin backend receives plugin-built entries (display + abs path)
 do
   local pick_me = SRC .. "/dot_pick_me.tmpl" -- created in the select test above
