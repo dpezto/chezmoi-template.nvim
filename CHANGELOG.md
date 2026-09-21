@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.0.2](https://github.com/dpezto/chezmoi-template.nvim/compare/v3.0.1...v3.0.2) (2026-09-21)
+
+
+### Bug Fixes
+
+* **inject:** type plain managed sources as their deployed file ([#37](https://github.com/dpezto/chezmoi-template.nvim/issues/37)) ([c2cb6cf](https://github.com/dpezto/chezmoi-template.nvim/commit/c2cb6cf705df7e79d64a7f047cacdd606e0b1221)), closes [#36](https://github.com/dpezto/chezmoi-template.nvim/issues/36)
+
 ## [3.0.1](https://github.com/dpezto/chezmoi-template.nvim/compare/v3.0.0...v3.0.1) (2026-09-04)
 
 
