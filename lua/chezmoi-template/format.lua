@@ -62,15 +62,16 @@ M.formatter = {
     -- (`k = {{ .x }}suffix`) or a control-flow pair wrapping content
     -- (`{{ if .on }}k = 1{{ end }}`); neither has a valid token form.
     -- map: placeholder -> original text. quoted: inline tokens the mask wrapped
-    -- in quotes.
+    -- in quotes. cont: continuation lines of a multi-line span.
     local function build_mask(coarse)
-      local masked, map, quoted, open = {}, {}, {}, false
+      local masked, map, quoted, cont, open = {}, {}, {}, {}, false
       for i, line in ipairs(lines) do
         local key = prefix .. " " .. sentinel .. i .. (suffix ~= "" and " " .. suffix or "")
         local indent = line:match("^(%s*)")
         if open then -- continuation of a multi-line {{ … }} span
           masked[i] = key
           map[key] = line
+          cont[key] = true
           open = not line:match("}}")
         elseif line:match("{{") and not line:match("}}") then -- opens a multi-line span
           open = true
@@ -125,7 +126,7 @@ M.formatter = {
           masked[i] = line
         end
       end
-      return masked, map, quoted
+      return masked, map, quoted, cont
     end
 
     -- Format in a throwaway buffer named in a temp dir (NOT the chezmoi source
@@ -174,7 +175,7 @@ M.formatter = {
     -- (an inline token's quotes escaped or removed). Accepting that output
     -- would silently delete template actions.
     local token_pat = "([\"']?)(" .. sentinel .. "%d+_%d+_)%1"
-    local function restore(formatted, map, quoted)
+    local function restore(formatted, map, quoted, cont)
       local expected, restored = vim.tbl_count(map), 0
 
       -- Whole-line placeholders get the formatter's indent, except closing
@@ -212,15 +213,21 @@ M.formatter = {
             end
             first = false
           end
-          -- Directive-interior indent, only for column-0 `{{-` directives
-          -- (data-munging header blocks): encode template nesting depth as
-          -- padding INSIDE the action (1 space + 2 per level). Directives that
-          -- participate in code layout (non-empty leading indent) keep their
-          -- single space — the code indent already shows structure.
-          if indent_directives and indent == "" and tmpl:match("^{{%-%s") then
-            tmpl = tmpl:gsub("^{{%-%s+", "{{-" .. string.rep(" ", 1 + 2 * depth), 1)
+          if cont[stripped] then
+            -- Inside a multi-line action: target-language indent would change
+            -- the action itself (a raw string's interior lines), so verbatim.
+            final[#final + 1] = tmpl
+          else
+            -- Directive-interior indent, only for column-0 `{{-` directives
+            -- (data-munging header blocks): encode template nesting depth as
+            -- padding INSIDE the action (1 space + 2 per level). Directives that
+            -- participate in code layout (non-empty leading indent) keep their
+            -- single space — the code indent already shows structure.
+            if indent_directives and indent == "" and tmpl:match("^{{%-%s") then
+              tmpl = tmpl:gsub("^{{%-%s+", "{{-" .. string.rep(" ", 1 + 2 * depth), 1)
+            end
+            final[#final + 1] = indent .. tmpl
           end
-          final[#final + 1] = indent .. tmpl
         else
           -- One pass per line. The mask's own quotes come off whichever quote
           -- character the formatter settled on; a bare token keeps whatever
@@ -246,9 +253,9 @@ M.formatter = {
       return final
     end
 
-    local fine, fine_map, fine_quoted = build_mask(false)
+    local fine, fine_map, fine_quoted, fine_cont = build_mask(false)
     run(fine, function(err, formatted)
-      local final = not err and restore(formatted, fine_map, fine_quoted)
+      local final = not err and restore(formatted, fine_map, fine_quoted, fine_cont)
       if final then
         return callback(nil, final)
       end
@@ -256,12 +263,12 @@ M.formatter = {
       -- output its tokens cannot be restored from. Retry with every template
       -- line inert, so one unmaskable line cannot block formatting the rest
       -- of the file.
-      local coarse, coarse_map, coarse_quoted = build_mask(true)
+      local coarse, coarse_map, coarse_quoted, coarse_cont = build_mask(true)
       run(coarse, function(coarse_err, coarse_formatted)
         if coarse_err then
           return callback(coarse_err)
         end
-        local coarse_final = restore(coarse_formatted, coarse_map, coarse_quoted)
+        local coarse_final = restore(coarse_formatted, coarse_map, coarse_quoted, coarse_cont)
         if not coarse_final then
           return callback("chezmoi: formatter output lost template placeholders")
         end

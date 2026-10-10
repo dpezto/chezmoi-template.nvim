@@ -299,6 +299,23 @@ run_case("unquoted token falls back to coarse", "lua", {
 }, {
   "local host = {{ .hostname | quote }}",
 })
+
+-- 15. interior lines of a multi-line action are part of the action (here a raw
+-- string), so the formatter's indent must not reach them
+_G.conform_transform = function(masked)
+  return vim.tbl_map(function(l)
+    return "  " .. l
+  end, masked)
+end
+run_case("multi-line span interior verbatim", "sh", {
+  "{{- $x := `a",
+  "b` }}",
+  "echo hi",
+}, {
+  "  {{- $x := `a",
+  "b` }}",
+  "  echo hi",
+})
 _G.conform_transform = nil
 
 -- 16. a token followed by digits: 1_1 must not swallow them as 1_12
