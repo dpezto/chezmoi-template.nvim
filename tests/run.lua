@@ -1368,8 +1368,8 @@ do
   os.remove(skip)
 end
 
--- an encrypted save replaces the file whole (mode kept) rather than
--- truncating the ciphertext first
+-- a failed encrypt fails the :write, and an encrypted save replaces the file
+-- whole (mode kept) rather than truncating the ciphertext first
 do
   local uv = vim.uv or vim.loop
   local age = SRC .. "/enc_safety.age"
@@ -1388,6 +1388,12 @@ do
   local b = vim.api.nvim_get_current_buf()
 
   vim.api.nvim_buf_set_lines(b, 0, -1, false, { "edited" })
+  fake["encrypt"] = { code = 1, stdout = "", stderr = "no recipients" }
+  clear_notes()
+  eq("failed encrypt fails the write", pcall(vim.cmd.write), false)
+  eq("failed encrypt is reported", has_note("no recipients"), true)
+  eq("failed encrypt keeps the buffer modified", vim.bo[b].modified, true)
+  eq("failed encrypt leaves the file alone", disk(), "CIPHERTEXT")
 
   fake["encrypt"] = { code = 0, stdout = "ENCRYPTED" }
 

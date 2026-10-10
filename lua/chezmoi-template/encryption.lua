@@ -135,6 +135,9 @@ local function write_cmd(args)
     vim.api.nvim_exec_autocmds("BufWritePost", { buffer = args.buf, modeline = false })
   else
     require("chezmoi-template").notify("error saving file:\n" .. (ret.stderr or ""), vim.log.levels.ERROR)
+    -- Fail the :write itself, so callers (pcall, :wq, other plugins) do not
+    -- take the save as done.
+    error("chezmoi-template: encrypted write failed", 0)
   end
 end
 
