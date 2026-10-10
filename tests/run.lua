@@ -585,6 +585,23 @@ eq("blink flatten", blink.flatten({ chezmoi = { hostname = "k", os = "darwin" },
   { path = ".roles", value = { "base" } },
 })
 
+-- blink mutates the items it receives; the cache must not see that
+do
+  local src = blink.new()
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "" })
+  local first, second
+  src:get_completions(nil, function(res)
+    first = res.items
+  end)
+  first[1].score_offset = 99
+  src:get_completions(nil, function(res)
+    second = res.items
+  end)
+  eq("blink items are copies of the cache", second[1].score_offset, nil)
+end
+
 local resolve = require("chezmoi-template.resolve")
 eq("resolve_path attributes", resolve.resolve_path("private_dot_zshrc.tmpl"), ".zshrc")
 eq(

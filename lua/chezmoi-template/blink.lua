@@ -384,7 +384,9 @@ function M:get_completions(_, callback)
   else
     items = block_items()
   end
-  callback({ is_incomplete_forward = false, is_incomplete_backward = false, items = items })
+  -- blink mutates returned items (score_offset, cursor_column), so hand it a
+  -- copy rather than the cached tables.
+  callback({ is_incomplete_forward = false, is_incomplete_backward = false, items = vim.deepcopy(items) })
 end
 
 return M
