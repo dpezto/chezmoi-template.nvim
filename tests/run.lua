@@ -217,6 +217,32 @@ run_case("coarse fallback on unmaskable lines", "toml", {
 end)
 _G.conform_reject = nil
 
+-- a target with no formatter returns the input untouched, without an error
+-- and without running conform (no second, coarse attempt either)
+do
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.b[buf].chezmoi_target_ft = "gitconfig"
+  _G.conform_none = true
+  _G.captured_masked = nil
+  local input = { "[user]", "  name = {{ .name }}" }
+  local got_err, got, done
+  format.formatter.format(nil, { buf = buf }, input, function(err, out)
+    got_err, got, done = err, out, true
+  end)
+  vim.wait(5000, function()
+    return done
+  end)
+  _G.conform_none = nil
+  local ok = done and got_err == nil and vim.deep_equal(got, input) and _G.captured_masked == nil
+  if not ok then
+    failures = failures + 1
+    print("FAIL no formatter returns the input untouched: " .. vim.inspect({ got_err, got, _G.captured_masked }))
+  else
+    print("ok   no formatter returns the input untouched")
+  end
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
 -- both passes failing still surfaces the error rather than silently mangling
 do
   local buf = vim.api.nvim_create_buf(false, true)

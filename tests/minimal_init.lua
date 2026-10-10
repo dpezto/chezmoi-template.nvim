@@ -14,12 +14,20 @@ end
 -- masked lines makes the stub reject that buffer, which is how the coarse
 -- fallback pass is exercised without a real formatter. _G.conform_transform,
 -- a function over the masked lines, stands in for a formatter that rewrites
--- them (requoting, reindenting, dropping lines).
+-- them (requoting, reindenting, dropping lines). _G.conform_none makes the
+-- stub report no formatter for the buffer.
 _G.captured_masked = nil
 _G.conform_reject = nil
 _G.conform_transform = nil
+_G.conform_none = nil
 package.preload["conform"] = function()
   local M = { formatters = {}, formatters_by_ft = {} }
+  function M.list_formatters_to_run()
+    if _G.conform_none then
+      return {}, false
+    end
+    return { { name = "stub", available = true } }, false
+  end
   function M.format(opts, cb)
     local masked = vim.api.nvim_buf_get_lines(opts.bufnr, 0, -1, false)
     _G.captured_masked = masked

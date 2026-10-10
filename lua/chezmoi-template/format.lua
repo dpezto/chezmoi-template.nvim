@@ -169,6 +169,14 @@ M.formatter = {
         vim.api.nvim_buf_delete(scratch, { force = true })
         return cb(setup_err)
       end
+      -- A target with no formatter (gitconfig, ghostty) has nothing to do:
+      -- report that as no output rather than conform's "No formatters
+      -- available" error, which no masking strength can fix.
+      local formatters, lsp = require("conform").list_formatters_to_run(scratch)
+      if #formatters == 0 and not lsp then
+        vim.api.nvim_buf_delete(scratch, { force = true })
+        return cb(nil, nil)
+      end
 
       require("conform").format({ bufnr = scratch, async = true, lsp_format = "fallback" }, function(err, _)
         if err then
@@ -268,6 +276,9 @@ M.formatter = {
 
     local fine, fine_map, fine_quoted, fine_cont = build_mask(false)
     run(fine, function(err, formatted)
+      if not err and not formatted then
+        return callback(nil, lines)
+      end
       local final = not err and restore(formatted, fine_map, fine_quoted, fine_cont)
       if final then
         return callback(nil, final)
