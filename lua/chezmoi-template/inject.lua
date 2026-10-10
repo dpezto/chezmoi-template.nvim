@@ -17,7 +17,19 @@ end
 function M.register_directive()
   vim.treesitter.query.add_directive("inject-chezmoi!", function(_, _, source, _, metadata)
     local bufnr = type(source) == "number" and source or vim.api.nvim_get_current_buf()
+    -- Checked here, not only when seeding: an unseeded buffer takes the name
+    -- fallback below, which would inject anyway.
+    local cfg = require("chezmoi-template").config.inject
+    if not cfg.enabled then
+      return
+    end
     local name = vim.api.nvim_buf_get_name(bufnr)
+    local nname = vim.fs.normalize(name)
+    for _, pat in ipairs(cfg.exclude) do
+      if nname:match(pat) then
+        return
+      end
+    end
 
     local lang = vim.b[bufnr] and vim.b[bufnr].chezmoi_target_lang
     if not lang then

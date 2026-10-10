@@ -1998,8 +1998,10 @@ do
   ct.config.inject.exclude = {}
 end
 
--- the inject-chezmoi! directive itself: it has to refuse gotmpl as a target (a
--- template injecting itself recurses) and skip a language whose parser is missing
+-- the inject-chezmoi! directive itself: it is what injects, so it has to honor
+-- inject.enabled and inject.exclude (an unseeded buffer takes its name fallback),
+-- refuse gotmpl as a target (a template injecting itself recurses), and skip a
+-- language whose parser is missing
 do
   local handler
   local real_add = vim.treesitter.query.add_directive
@@ -2026,6 +2028,12 @@ do
   eq("directive falls back to the buffer name", injected("/x/dot_fallback.lua.tmpl"), "lua")
   eq("directive skips a missing parser", injected("/x/seeded_b.tmpl", "no_such_lang_xyz"), nil)
   eq("directive refuses a gotmpl target", injected("/x/literal_demo.tmpl"), nil)
+  ct.config.inject.exclude = { "skip_inject" }
+  eq("directive honors inject.exclude", injected("/x/skip_inject.lua.tmpl"), nil)
+  ct.config.inject.exclude = {}
+  ct.config.inject.enabled = false
+  eq("directive honors inject.enabled", injected("/x/disabled.lua.tmpl", "lua"), nil)
+  ct.config.inject.enabled = true
 
   eq("has_parser true for a bundled parser", resolve.has_parser("lua"), true)
   eq("has_parser false for a missing parser", resolve.has_parser("no_such_lang_xyz"), false)
