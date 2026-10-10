@@ -147,6 +147,29 @@ local function write_cmd(args)
   end
 end
 
+-- Partial writes (:1write!) and appends (:w >>) bypass BufWriteCmd and would
+-- put plaintext into, or over, the ciphertext. A range written to another
+-- file is encrypted like :w {file} of the whole buffer; a range over this
+-- buffer's own file, or any append, has no sensible encrypted form.
+local function partial_write(args)
+  local function real(path)
+    return vim.fs.normalize(vim.fn.resolve(vim.fn.fnamemodify(path, ":p")))
+  end
+  if args.event == "FileAppendCmd" or real(args.file) == real(vim.api.nvim_buf_get_name(args.buf)) then
+    error("chezmoi-template: partial writes and appends are not supported for " .. args.file, 0)
+  end
+  if not vim.b[args.buf].chezmoi_decrypted then
+    error("chezmoi-template: not saving " .. args.file .. ", it was never decrypted", 0)
+  end
+  local first, last = vim.api.nvim_buf_get_mark(args.buf, "[")[1], vim.api.nvim_buf_get_mark(args.buf, "]")[1]
+  local lines = vim.api.nvim_buf_get_lines(args.buf, first - 1, last, false)
+  local ret = encrypt(table.concat(lines, "\n") .. "\n", args.file)
+  if ret.code ~= 0 then
+    require("chezmoi-template").notify("error saving file:\n" .. (ret.stderr or ""), vim.log.levels.ERROR)
+    error("chezmoi-template: encrypted write failed", 0)
+  end
+end
+
 -- Install the buffer-local handlers. Buffer-local so other encrypted files
 -- won't see these events; cleared first because :edit! fires BufReadPre on the
 -- same buffer again, and a second set would decrypt and encrypt twice.
@@ -159,6 +182,11 @@ local function arm(group, buf)
     group = group,
     buffer = buf,
     callback = write_cmd,
+  })
+  vim.api.nvim_create_autocmd({ "FileWriteCmd", "FileAppendCmd" }, {
+    group = group,
+    buffer = buf,
+    callback = partial_write,
   })
 end
 
@@ -188,6 +216,21 @@ function M.setup()
         buffer = ctx.buf,
         callback = read_post,
       })
+    end,
+  })
+
+  -- A new encrypted file has nothing to decrypt, but its first save must still
+  -- go through chezmoi encrypt rather than land on disk as plaintext.
+  vim.api.nvim_create_autocmd("BufNewFile", {
+    group = group,
+    pattern = { "*.age", "*.asc" },
+    callback = function(ctx)
+      if not eligible(ctx.file) then
+        return
+      end
+      require("chezmoi-template")._activate()
+      arm(group, ctx.buf)
+      vim.b[ctx.buf].chezmoi_decrypted = true
     end,
   })
 end

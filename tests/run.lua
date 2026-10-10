@@ -542,15 +542,17 @@ end
 local fake = {} -- subcommand -> canned vim.system result
 local spawns = {} -- subcommand -> call count
 local sent = {} -- subcommand -> full cmd array of the last spawn (for flag asserts)
+local stdin = {} -- subcommand -> stdin of the last spawn
 local real_system = vim.system
 ---@diagnostic disable-next-line: duplicate-set-field
-vim.system = function(cmd, _, cb)
+vim.system = function(cmd, opts, cb)
   if cmd[1] ~= "chezmoi" then
-    return real_system(cmd, _, cb)
+    return real_system(cmd, opts, cb)
   end
   local key = cmd[2]
   spawns[key] = (spawns[key] or 0) + 1
   sent[key] = cmd
+  stdin[key] = opts and opts.stdin
   local ret = vim.deepcopy(fake[key] or { code = 1, stdout = "", stderr = "no fake for " .. key })
   -- a canned reply can take its time, for the paths that react to a slow spawn
   if ret.delay_ms then
@@ -1368,9 +1370,10 @@ do
   os.remove(skip)
 end
 
--- encryption never puts a broken copy where the ciphertext was: a failed
--- decrypt refuses to save, a failed encrypt fails the :write, a reload does not
--- stack handlers, and the file is replaced whole (mode kept)
+-- encryption never puts plaintext or a broken copy where the ciphertext was: a
+-- failed decrypt refuses to save, a failed encrypt fails the :write, partial
+-- writes and appends are refused, a reload does not stack handlers, the file is
+-- replaced whole (mode kept), and a new file still goes through chezmoi encrypt
 do
   local uv = vim.uv or vim.loop
   local age = SRC .. "/enc_safety.age"
@@ -1390,6 +1393,7 @@ do
   local b = vim.api.nvim_get_current_buf()
   eq("undecrypted buffer refuses to save", pcall(vim.cmd.write), false)
   eq("undecrypted save leaves the ciphertext", disk(), "CIPHERTEXT")
+  eq("undecrypted buffer refuses a range write", pcall(vim.cmd, "1write " .. vim.fn.fnameescape(SRC .. "/enc_range.age")), false)
 
   local function handlers()
     return #vim.api.nvim_get_autocmds({ group = "chezmoi-template.encryption", buffer = b })
@@ -1401,7 +1405,7 @@ do
   eq("reload does not stack encryption handlers", handlers(), n)
   eq("reload after a failed decrypt decrypts", vim.api.nvim_buf_get_lines(b, 0, -1, false), { "plain" })
 
-  vim.api.nvim_buf_set_lines(b, 0, -1, false, { "edited" })
+  vim.api.nvim_buf_set_lines(b, 0, -1, false, { "edited", "two lines, so :1write is partial" })
   fake["encrypt"] = { code = 1, stdout = "", stderr = "no recipients" }
   clear_notes()
   eq("failed encrypt fails the write", pcall(vim.cmd.write), false)
@@ -1409,6 +1413,22 @@ do
   eq("failed encrypt keeps the buffer modified", vim.bo[b].modified, true)
   eq("failed encrypt leaves the file alone", disk(), "CIPHERTEXT")
 
+  fake["encrypt"] = { code = 0, stdout = "ENCRYPTED" }
+  eq("partial write is refused", pcall(vim.cmd, "1write!"), false)
+  eq("append is refused", pcall(vim.cmd, "write >>"), false)
+  eq("refused writes leave the file alone", disk(), "CIPHERTEXT")
+
+  local range = SRC .. "/enc_range.age"
+  vim.cmd("1write " .. vim.fn.fnameescape(range))
+  eq("range to another file is encrypted", disk(range), "ENCRYPTED")
+  eq("range write encrypts only the range", stdin["encrypt"], "edited\n")
+  eq("range write leaves the buffer modified", vim.bo[b].modified, true)
+  os.remove(range)
+  fake["encrypt"] = { code = 1, stdout = "", stderr = "no recipients" }
+  clear_notes()
+  eq("failed range encrypt fails the write", pcall(vim.cmd, "1write " .. vim.fn.fnameescape(range)), false)
+  eq("failed range encrypt is reported", has_note("no recipients"), true)
+  eq("failed range encrypt writes nothing", uv.fs_stat(range), nil)
   fake["encrypt"] = { code = 0, stdout = "ENCRYPTED" }
 
   uv.fs_chmod(age, 384) -- 0600
@@ -1420,6 +1440,24 @@ do
   end
   vim.api.nvim_buf_delete(b, { force = true })
   os.remove(age)
+
+  local new = SRC .. "/enc_new.age"
+  vim.cmd.edit(vim.fn.fnameescape(new))
+  local nb = vim.api.nvim_get_current_buf()
+  eq("new encrypted file gets no swapfile", vim.bo[nb].swapfile, false)
+  vim.api.nvim_buf_set_lines(nb, 0, -1, false, { "fresh secret" })
+  vim.cmd.write()
+  eq("new encrypted file is written encrypted", disk(new), "ENCRYPTED")
+  vim.api.nvim_buf_delete(nb, { force = true })
+  os.remove(new)
+
+  -- disabled, excluded, unmanaged: a new *.age is left to the normal write
+  local plain_new = SRC .. "/skipme_new.age"
+  vim.cmd.edit(vim.fn.fnameescape(plain_new))
+  local pb = vim.api.nvim_get_current_buf()
+  local armed = vim.api.nvim_get_autocmds({ group = "chezmoi-template.encryption", buffer = pb })
+  eq("excluded new *.age gets no encryption handler", #armed, 0)
+  vim.api.nvim_buf_delete(pb, { force = true })
 end
 
 -- encryption must survive the two-call setup order: the plugin/ bootstrap runs
