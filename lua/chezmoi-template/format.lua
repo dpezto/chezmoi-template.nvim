@@ -129,9 +129,13 @@ M.formatter = {
       return masked, map, quoted, cont
     end
 
-    -- Format in a throwaway buffer named in a temp dir (NOT the chezmoi source
-    -- dir) so *.tmpl autocmds never fire on it; set the name and filetype with
-    -- noautocmd so no LSP attaches to a buffer we delete mid-async.
+    -- Format in a throwaway buffer named after the target in the source file's
+    -- own directory, so formatters find the repo's config (stylua.toml,
+    -- taplo.toml). The name drops .tmpl, so *.tmpl autocmds never fire on it;
+    -- set the name and filetype with noautocmd so no LSP attaches to a buffer
+    -- we delete mid-async. A formatter that needs a real file (stdin = false)
+    -- gets a .conform.* temp file beside it; chezmoi ignores source names
+    -- starting with a dot, so one left by an interrupted format is never applied.
     local function run(masked, cb)
       local scratch = vim.api.nvim_create_buf(false, true)
       vim.bo[scratch].buftype = ""
