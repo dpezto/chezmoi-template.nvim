@@ -473,7 +473,7 @@ do
   vim.wait(5000, function()
     return done
   end)
-  eq("scratch strips .age before .tmpl", (_G.captured_name or ""):match("/config%.yaml$") ~= nil, true)
+  eq("scratch strips .age before .tmpl", vim.fs.normalize(_G.captured_name or ""):match("/config%.yaml$") ~= nil, true)
 end
 
 -- a second format while the first scratch still holds the name fails cleanly
