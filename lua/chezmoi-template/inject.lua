@@ -18,7 +18,7 @@ function M.register_directive()
   vim.treesitter.query.add_directive("inject-chezmoi!", function(_, _, source, _, metadata)
     local bufnr = type(source) == "number" and source or vim.api.nvim_get_current_buf()
     if vim.b[bufnr] and vim.b[bufnr].chezmoi_target_lang then
-      if pcall(vim.treesitter.language.add, vim.b[bufnr].chezmoi_target_lang) then
+      if resolve.has_parser(vim.b[bufnr].chezmoi_target_lang) then
         metadata["injection.language"] = vim.b[bufnr].chezmoi_target_lang
         metadata["injection.combined"] = true
       end
@@ -31,7 +31,7 @@ function M.register_directive()
     local ft = vim.filetype.match({ filename = resolved })
     if ft then
       local lang = vim.treesitter.language.get_lang(ft) or ft
-      if pcall(vim.treesitter.language.add, lang) then
+      if resolve.has_parser(lang) then
         metadata["injection.language"] = lang
         metadata["injection.combined"] = true
       end

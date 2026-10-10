@@ -394,6 +394,15 @@ function M.invalidate()
   end
 end
 
+-- language.add throws for a missing parser on Neovim 0.10 but returns
+-- nil, err from 0.11 on, so a successful pcall alone does not mean it loaded.
+local ADD_RETURNS = vim.fn.has("nvim-0.11") == 1
+
+function M.has_parser(lang)
+  local ok, loaded = pcall(vim.treesitter.language.add, lang)
+  return ok and (loaded == true or not ADD_RETURNS)
+end
+
 -- Record the target filetype/language on the buffer for the inject-chezmoi!
 -- directive and the conform formatter to read.
 function M.seed(buf, ft)
@@ -403,7 +412,7 @@ function M.seed(buf, ft)
   vim.b[buf].chezmoi_target_ft = ft
   if ft ~= "gotmpl" then
     local lang = vim.treesitter.language.get_lang(ft) or ft
-    if pcall(vim.treesitter.language.add, lang) then
+    if M.has_parser(lang) then
       vim.b[buf].chezmoi_target_lang = lang
     end
   end

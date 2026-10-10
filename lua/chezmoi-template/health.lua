@@ -13,7 +13,8 @@ function M.check()
     )
   end
 
-  if pcall(vim.treesitter.language.add, "gotmpl") then
+  local resolve = require("chezmoi-template.resolve")
+  if resolve.has_parser("gotmpl") then
     health.ok("gotmpl treesitter parser installed")
   else
     health.error("gotmpl treesitter parser missing", "Install it, e.g. via nvim-treesitter: :TSInstall gotmpl")
@@ -21,7 +22,7 @@ function M.check()
 
   -- blink completion docs are fenced code blocks; without markdown_inline they
   -- render as literal ``` and the value's type isn't highlighted
-  if pcall(vim.treesitter.language.add, "markdown_inline") then
+  if resolve.has_parser("markdown_inline") then
     health.ok("markdown_inline parser installed (highlighted completion docs)")
   else
     health.warn(

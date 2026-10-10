@@ -1998,6 +1998,37 @@ do
   ct.config.inject.exclude = {}
 end
 
+-- the inject-chezmoi! directive itself skips a language whose parser is missing
+do
+  local handler
+  local real_add = vim.treesitter.query.add_directive
+  vim.treesitter.query.add_directive = function(name, fn, opts)
+    if name == "inject-chezmoi!" then
+      handler = fn
+    end
+    return real_add(name, fn, opts)
+  end
+  require("chezmoi-template.inject").register_directive()
+  vim.treesitter.query.add_directive = real_add
+
+  local function injected(name, lang)
+    local b = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_name(b, name)
+    vim.b[b].chezmoi_target_lang = lang
+    local md = {}
+    handler(nil, nil, b, nil, md)
+    vim.api.nvim_buf_delete(b, { force = true })
+    return md["injection.language"]
+  end
+
+  eq("directive injects the seeded language", injected("/x/seeded_a.tmpl", "lua"), "lua")
+  eq("directive falls back to the buffer name", injected("/x/dot_fallback.lua.tmpl"), "lua")
+  eq("directive skips a missing parser", injected("/x/seeded_b.tmpl", "no_such_lang_xyz"), nil)
+
+  eq("has_parser true for a bundled parser", resolve.has_parser("lua"), true)
+  eq("has_parser false for a missing parser", resolve.has_parser("no_such_lang_xyz"), false)
+end
+
 -- _register wires encryption up front rather than leaving it to _activate: an
 -- autocmd created while BufReadPre is already dispatching does not run for that
 -- read, so the first encrypted file of a session would open as ciphertext. It
