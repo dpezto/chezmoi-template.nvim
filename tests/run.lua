@@ -1368,6 +1368,40 @@ do
   os.remove(skip)
 end
 
+-- an encrypted save replaces the file whole (mode kept) rather than
+-- truncating the ciphertext first
+do
+  local uv = vim.uv or vim.loop
+  local age = SRC .. "/enc_safety.age"
+  local function disk(path)
+    local rf = assert(io.open(path or age, "rb"))
+    local d = rf:read("*a")
+    rf:close()
+    return d
+  end
+  local f = assert(io.open(age, "wb"))
+  f:write("CIPHERTEXT")
+  f:close()
+
+  fake["decrypt"] = { code = 0, stdout = "plain\n" }
+  vim.cmd.edit(vim.fn.fnameescape(age))
+  local b = vim.api.nvim_get_current_buf()
+
+  vim.api.nvim_buf_set_lines(b, 0, -1, false, { "edited" })
+
+  fake["encrypt"] = { code = 0, stdout = "ENCRYPTED" }
+
+  uv.fs_chmod(age, 384) -- 0600
+  vim.cmd.write()
+  eq("encrypted write replaces the file", disk(), "ENCRYPTED")
+  eq("encrypted write leaves no temp file", uv.fs_stat(SRC .. "/.enc_safety.age.tmp"), nil)
+  if vim.fn.has("win32") == 0 then
+    eq("encrypted write keeps the file mode", uv.fs_stat(age).mode % 512, 384)
+  end
+  vim.api.nvim_buf_delete(b, { force = true })
+  os.remove(age)
+end
+
 -- encryption must survive the two-call setup order: the plugin/ bootstrap runs
 -- setup({}) with encryption off, then lazy.nvim merges `opts` and turns it on.
 -- _register() only runs once, so deciding there left the augroup missing and

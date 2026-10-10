@@ -7,6 +7,8 @@ local M = {}
 
 local resolve = require("chezmoi-template.resolve")
 
+local uv = vim.uv or vim.loop
+
 local function cfg()
   return require("chezmoi-template").config.encryption
 end
@@ -21,16 +23,33 @@ end
 local function encrypt(text, file)
   local ret = resolve.chezmoi({ "encrypt" }, { stdin = text }):wait()
   if ret.code == 0 then
-    local out = io.open(file, "wb")
+    -- Write a sibling temp file and rename it over the original: opening the
+    -- original "wb" truncates it first, so a failed write (disk full, I/O
+    -- error) would leave neither the old nor the new ciphertext. Resolve
+    -- symlinks so the rename replaces the file, not the link. The dot prefix
+    -- keeps chezmoi from reading a leftover temp file as source state.
+    file = uv.fs_realpath(file) or file
+    local tmp = vim.fn.fnamemodify(file, ":h") .. "/." .. vim.fn.fnamemodify(file, ":t") .. ".tmp"
+    local out = io.open(tmp, "wb")
     if not out then
-      return { code = 1, stderr = "cannot open " .. file .. " for writing" }
+      return { code = 1, stderr = "cannot open " .. tmp .. " for writing" }
     end
     -- A failed write (disk full, I/O error) must not report success — the
     -- buffer would be marked unmodified with the file unwritten.
     local wok, werr = out:write(ret.stdout)
     local cok = out:close()
     if not wok or not cok then
+      os.remove(tmp)
       return { code = 1, stderr = "failed writing " .. file .. (werr and ": " .. werr or "") }
+    end
+    local stat = uv.fs_stat(file)
+    if stat then
+      uv.fs_chmod(tmp, stat.mode % 512)
+    end
+    local rok, rerr = uv.fs_rename(tmp, file)
+    if not rok then
+      os.remove(tmp)
+      return { code = 1, stderr = "failed replacing " .. file .. ": " .. tostring(rerr) }
     end
   end
   return ret
