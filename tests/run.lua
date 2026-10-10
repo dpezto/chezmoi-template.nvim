@@ -274,6 +274,68 @@ run_case("gotmpl target passes through", "gotmpl", {
   "{{- end }}",
 })
 
+-- 13. a formatter that prefers single quotes (StyLua, prettier singleQuote)
+-- requotes the masked value; the action must come back, not 'CHEZMOI_TMPL_…'
+_G.conform_transform = function(masked)
+  return vim.tbl_map(function(l)
+    return (l:gsub('"', "'"))
+  end, masked)
+end
+run_case("requoted token restored", "lua", {
+  "local host = {{ .hostname | quote }}",
+}, {
+  "local host = {{ .hostname | quote }}",
+})
+
+-- 14. a formatter that drops the mask's quotes entirely: the fine pass cannot
+-- tell its token from content, so it falls back to the coarse pass
+_G.conform_transform = function(masked)
+  return vim.tbl_map(function(l)
+    return (l:gsub('"', ""))
+  end, masked)
+end
+run_case("unquoted token falls back to coarse", "lua", {
+  "local host = {{ .hostname | quote }}",
+}, {
+  "local host = {{ .hostname | quote }}",
+})
+_G.conform_transform = nil
+
+-- 16. a token followed by digits: 1_1 must not swallow them as 1_12
+run_case("token followed by digits", "toml", {
+  "[d]",
+  'k = "v{{ .n }}2"',
+}, {
+  "[d]",
+  'k = "v{{ .n }}2"',
+})
+
+-- 17. a formatter that deletes placeholder lines in both passes: an error, never
+-- output with the template actions missing
+do
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.b[buf].chezmoi_target_ft = "sh"
+  _G.conform_transform = function(masked)
+    return vim.tbl_filter(function(l)
+      return not l:find("CHEZMOI_TMPL_", 1, true)
+    end, masked)
+  end
+  local got_err, got_out, done
+  format.formatter.format(nil, { buf = buf }, { "{{- if .x }}", "echo hi", "{{- end }}" }, function(err, out)
+    got_err, got_out, done = err, out, true
+  end)
+  vim.wait(5000, function()
+    return done
+  end)
+  _G.conform_transform = nil
+  if got_err and not got_out then
+    print("ok   dropped placeholders report an error")
+  else
+    failures = failures + 1
+    print("FAIL dropped placeholders report an error: " .. vim.inspect(got_out))
+  end
+end
+
 -- Pure-function cases -------------------------------------------------------
 
 local function eq(name, got, want)

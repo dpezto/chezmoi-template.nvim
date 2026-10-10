@@ -61,8 +61,10 @@ M.formatter = {
     -- fine pass cannot express — a template glued to a bare word
     -- (`k = {{ .x }}suffix`) or a control-flow pair wrapping content
     -- (`{{ if .on }}k = 1{{ end }}`); neither has a valid token form.
+    -- map: placeholder -> original text. quoted: inline tokens the mask wrapped
+    -- in quotes.
     local function build_mask(coarse)
-      local masked, map, open = {}, {}, false
+      local masked, map, quoted, open = {}, {}, {}, false
       for i, line in ipairs(lines) do
         local key = prefix .. " " .. sentinel .. i .. (suffix ~= "" and " " .. suffix or "")
         local indent = line:match("^(%s*)")
@@ -107,9 +109,14 @@ M.formatter = {
             -- quoting it there splits the identifier and breaks TOML/JSON.
             local _, q = res:gsub('\\"', ""):gsub('"', "")
             local adjacent = res:sub(-1):match("[%w_%-%.]") or line:sub(t_end + 1, t_end + 1):match("[%w_%-%.]")
-            local k = sentinel .. i .. "_" .. j
-            k = (q % 2 == 0 and not res:match('"$') and not adjacent) and '"' .. k .. '"' or k
+            -- The trailing "_" ends the token, so restore() can tell 1_1 from
+            -- 1_11 even when digits follow it in the line.
+            local k = sentinel .. i .. "_" .. j .. "_"
             map[k] = tmpl
+            if q % 2 == 0 and not res:match('"$') and not adjacent then
+              quoted[k] = true
+              k = '"' .. k .. '"'
+            end
             res = res .. k
             pos = t_end + 1
           end
@@ -118,7 +125,7 @@ M.formatter = {
           masked[i] = line
         end
       end
-      return masked, map
+      return masked, map, quoted
     end
 
     -- Format in a throwaway buffer named in a temp dir (NOT the chezmoi source
@@ -162,11 +169,13 @@ M.formatter = {
       end)
     end
 
-    local function restore(formatted, map)
-      local keys = vim.tbl_keys(map)
-      table.sort(keys, function(a, b)
-        return #a > #b
-      end)
+    -- Returns the restored lines, or nil when the formatter output cannot be
+    -- mapped back exactly: a placeholder dropped, duplicated, or rewritten
+    -- (an inline token's quotes escaped or removed). Accepting that output
+    -- would silently delete template actions.
+    local token_pat = "([\"']?)(" .. sentinel .. "%d+_%d+_)%1"
+    local function restore(formatted, map, quoted)
+      local expected, restored = vim.tbl_count(map), 0
 
       -- Whole-line placeholders get the formatter's indent, except closing
       -- directives: formatters misplace a comment sitting before a closing
@@ -179,6 +188,7 @@ M.formatter = {
         local stripped = line:sub(#indent + 1)
         local tmpl = map[stripped]
         if tmpl then
+          restored = restored + 1
           -- Depth of this line = stack size before its own pops/pushes;
           -- end/else belong to their opener's level.
           local depth = #stack
@@ -212,32 +222,50 @@ M.formatter = {
           end
           final[#final + 1] = indent .. tmpl
         else
-          for _, k in ipairs(keys) do
-            line = line:gsub(k, function()
-              return map[k]
-            end)
+          -- One pass per line. The mask's own quotes come off whichever quote
+          -- character the formatter settled on; a bare token keeps whatever
+          -- quotes surround it.
+          line = line:gsub(token_pat, function(q, tok)
+            local orig = map[tok]
+            if not orig or (quoted[tok] and q == "") then
+              return nil
+            end
+            restored = restored + 1
+            return quoted[tok] and orig or q .. orig .. q
+          end)
+          if line:find(sentinel, 1, true) then
+            return nil
           end
           final[#final + 1] = line
         end
       end
 
-      callback(nil, final)
+      if restored ~= expected then
+        return nil
+      end
+      return final
     end
 
-    local fine, fine_map = build_mask(false)
+    local fine, fine_map, fine_quoted = build_mask(false)
     run(fine, function(err, formatted)
-      if not err then
-        return restore(formatted, fine_map)
+      local final = not err and restore(formatted, fine_map, fine_quoted)
+      if final then
+        return callback(nil, final)
       end
-      -- The fine mask produced something the target formatter rejects. Retry
-      -- with every template line inert, so one unmaskable line cannot block
-      -- formatting the rest of the file.
-      local coarse, coarse_map = build_mask(true)
+      -- The fine mask produced something the target formatter rejects, or
+      -- output its tokens cannot be restored from. Retry with every template
+      -- line inert, so one unmaskable line cannot block formatting the rest
+      -- of the file.
+      local coarse, coarse_map, coarse_quoted = build_mask(true)
       run(coarse, function(coarse_err, coarse_formatted)
         if coarse_err then
           return callback(coarse_err)
         end
-        restore(coarse_formatted, coarse_map)
+        local coarse_final = restore(coarse_formatted, coarse_map, coarse_quoted)
+        if not coarse_final then
+          return callback("chezmoi: formatter output lost template placeholders")
+        end
+        callback(nil, coarse_final)
       end)
     end)
   end,
