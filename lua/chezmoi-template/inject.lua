@@ -17,24 +17,20 @@ end
 function M.register_directive()
   vim.treesitter.query.add_directive("inject-chezmoi!", function(_, _, source, _, metadata)
     local bufnr = type(source) == "number" and source or vim.api.nvim_get_current_buf()
-    if vim.b[bufnr] and vim.b[bufnr].chezmoi_target_lang then
-      if resolve.has_parser(vim.b[bufnr].chezmoi_target_lang) then
-        metadata["injection.language"] = vim.b[bufnr].chezmoi_target_lang
-        metadata["injection.combined"] = true
-      end
-      return
-    end
+    local name = vim.api.nvim_buf_get_name(bufnr)
 
-    -- No seeded language (unmanaged *.tmpl, or chezmoi unavailable):
-    -- fall back to pure attribute stripping of the buffer name.
-    local resolved = resolve.resolve_path(vim.api.nvim_buf_get_name(bufnr))
-    local ft = vim.filetype.match({ filename = resolved })
-    if ft then
-      local lang = vim.treesitter.language.get_lang(ft) or ft
-      if resolve.has_parser(lang) then
-        metadata["injection.language"] = lang
-        metadata["injection.combined"] = true
-      end
+    local lang = vim.b[bufnr] and vim.b[bufnr].chezmoi_target_lang
+    if not lang then
+      -- No seeded language (unmanaged *.tmpl, or chezmoi unavailable):
+      -- fall back to pure attribute stripping of the buffer name.
+      local ft = vim.filetype.match({ filename = resolve.resolve_path(name) })
+      lang = ft and (vim.treesitter.language.get_lang(ft) or ft)
+    end
+    -- A target that is itself a template (literal_x.tmpl, x.tmpl.literal)
+    -- would inject gotmpl into its own text nodes, recursively.
+    if lang and lang ~= "gotmpl" and resolve.has_parser(lang) then
+      metadata["injection.language"] = lang
+      metadata["injection.combined"] = true
     end
   end, { force = true })
 end
