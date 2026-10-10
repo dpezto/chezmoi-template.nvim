@@ -343,7 +343,9 @@ local function ts_where()
     if not parser then
       return nil
     end
-    parser:parse(true)
+    -- Root tree only: classifying the cursor needs no injected languages, and
+    -- parse(true) would parse the whole injected target document too.
+    parser:parse()
     local node = vim.treesitter.get_node()
     if not node then
       return "text"
