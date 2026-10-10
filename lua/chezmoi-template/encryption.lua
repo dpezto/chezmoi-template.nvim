@@ -147,6 +147,21 @@ local function write_cmd(args)
   end
 end
 
+-- Install the buffer-local handlers. Buffer-local so other encrypted files
+-- won't see these events; cleared first because :edit! fires BufReadPre on the
+-- same buffer again, and a second set would decrypt and encrypt twice.
+local function arm(group, buf)
+  vim.api.nvim_clear_autocmds({ group = group, buffer = buf })
+  -- Never persist decrypted content: no swap, no undo history on disk
+  vim.bo[buf].swapfile = false
+  vim.bo[buf].undofile = false
+  vim.api.nvim_create_autocmd("BufWriteCmd", {
+    group = group,
+    buffer = buf,
+    callback = write_cmd,
+  })
+end
+
 function M.setup()
   local group = vim.api.nvim_create_augroup("chezmoi-template.encryption", { clear = true })
 
@@ -164,23 +179,14 @@ function M.setup()
       -- here because _activate() no longer touches this module's augroup.
       require("chezmoi-template")._activate()
 
-      -- Never persist decrypted content: no swap, no undo history on disk
+      arm(group, ctx.buf)
       vim.bo[ctx.buf].binary = true
-      vim.bo[ctx.buf].swapfile = false
-      vim.bo[ctx.buf].undofile = false
       -- Saving is refused until read_post has decrypted the file
       vim.b[ctx.buf].chezmoi_decrypted = false
-
-      -- Buffer-local: other encrypted files won't see these events
       vim.api.nvim_create_autocmd("BufReadPost", {
         group = group,
         buffer = ctx.buf,
         callback = read_post,
-      })
-      vim.api.nvim_create_autocmd("BufWriteCmd", {
-        group = group,
-        buffer = ctx.buf,
-        callback = write_cmd,
       })
     end,
   })

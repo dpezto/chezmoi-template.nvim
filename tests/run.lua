@@ -1369,8 +1369,8 @@ do
 end
 
 -- encryption never puts a broken copy where the ciphertext was: a failed
--- decrypt refuses to save, a failed encrypt fails the :write, and the file is
--- replaced whole (mode kept)
+-- decrypt refuses to save, a failed encrypt fails the :write, a reload does not
+-- stack handlers, and the file is replaced whole (mode kept)
 do
   local uv = vim.uv or vim.loop
   local age = SRC .. "/enc_safety.age"
@@ -1391,8 +1391,14 @@ do
   eq("undecrypted buffer refuses to save", pcall(vim.cmd.write), false)
   eq("undecrypted save leaves the ciphertext", disk(), "CIPHERTEXT")
 
+  local function handlers()
+    return #vim.api.nvim_get_autocmds({ group = "chezmoi-template.encryption", buffer = b })
+  end
   fake["decrypt"] = { code = 0, stdout = "plain\n" }
   vim.cmd("edit!")
+  local n = handlers()
+  vim.cmd("edit!")
+  eq("reload does not stack encryption handlers", handlers(), n)
   eq("reload after a failed decrypt decrypts", vim.api.nvim_buf_get_lines(b, 0, -1, false), { "plain" })
 
   vim.api.nvim_buf_set_lines(b, 0, -1, false, { "edited" })
