@@ -1541,6 +1541,18 @@ do
   picker._seed_preview(pv, "/outside/dot_x.tmpl")
   eq("seed_preview clears stale vars for unmanaged paths", vim.b[pv].chezmoi_target_ft, nil)
 
+  -- a running highlighter restarts in the language a plain file already had;
+  -- only templates switch to gotmpl (absent here, so that start may fail)
+  local lp = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(lp, 0, -1, false, { "local x = 1" })
+  vim.treesitter.start(lp, "lua")
+  picker._seed_preview(lp, SRC .. "/dot_config/init.lua")
+  local hl = vim.treesitter.highlighter.active[lp]
+  eq("seed_preview keeps a plain file's language", hl and hl.tree:lang(), "lua")
+  picker._seed_preview(lp, SRC .. "/dot_config/init.lua.tmpl")
+  hl = vim.treesitter.highlighter.active[lp]
+  eq("seed_preview restarts templates as gotmpl", hl == nil or hl.tree:lang() == "gotmpl", true)
+
   -- select fallback via the string shorthand (kept file reused by the
   -- backend-stub block below, which removes it)
   local pick_me = SRC .. "/dot_pick_me.tmpl"
