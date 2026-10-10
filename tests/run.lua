@@ -1666,7 +1666,11 @@ do
   local b = vim.api.nvim_get_current_buf()
   eq("undecrypted buffer refuses to save", pcall(vim.cmd.write), false)
   eq("undecrypted save leaves the ciphertext", disk(), "CIPHERTEXT")
-  eq("undecrypted buffer refuses a range write", pcall(vim.cmd, "1write " .. vim.fn.fnameescape(SRC .. "/enc_range.age")), false)
+  eq(
+    "undecrypted buffer refuses a range write",
+    pcall(vim.cmd, "1write " .. vim.fn.fnameescape(SRC .. "/enc_range.age")),
+    false
+  )
 
   local function handlers()
     return #vim.api.nvim_get_autocmds({ group = "chezmoi-template.encryption", buffer = b })
