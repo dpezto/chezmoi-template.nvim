@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.0.3](https://github.com/dpezto/chezmoi-template.nvim/compare/v3.0.2...v3.0.3) (2026-10-10)
+
+
+### Bug Fixes
+
+* correctness and performance fixes ([#44](https://github.com/dpezto/chezmoi-template.nvim/issues/44)) ([ec54522](https://github.com/dpezto/chezmoi-template.nvim/commit/ec545225d2438487d89b9e5146c2d29820d91b87))
+
 ## [3.0.2](https://github.com/dpezto/chezmoi-template.nvim/compare/v3.0.1...v3.0.2) (2026-10-05)
 
 
