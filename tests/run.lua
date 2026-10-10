@@ -1124,7 +1124,7 @@ do
 end
 
 -- diagnostics: a superseded check cannot bring back an error the newer one
--- cleared
+-- cleared, and every gotmpl buffer is checked on write, not only *.tmpl names
 do
   local real_exec = resolve.execute_template
   local held = {}
@@ -1139,6 +1139,17 @@ do
   vim.wait(300)
   eq("superseded check cannot restore its error", #vim.diagnostic.get(db), 0)
   resolve.execute_template = real_exec
+
+  local eb = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(eb, SRC .. "/encrypted_diag.tmpl.age")
+  vim.bo[eb].filetype = "gotmpl"
+  fake["execute-template"] = { code = 1, stderr = "chezmoi: template: default:1: boom" }
+  vim.api.nvim_exec_autocmds("BufWritePost", { buffer = eb })
+  vim.wait(1000, function()
+    return #vim.diagnostic.get(eb) > 0
+  end)
+  eq("diagnostics check gotmpl buffers not named *.tmpl", #vim.diagnostic.get(eb), 1)
+  fake["execute-template"] = { code = 0, stdout = "rendered ok\n" }
 end
 
 -- gf follows a {{ template "name" }} argument into .chezmoitemplates/, and the

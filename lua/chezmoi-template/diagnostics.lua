@@ -59,9 +59,10 @@ end
 
 function M.setup()
   vim.api.nvim_create_augroup("chezmoi-template.diagnostics", { clear = true })
+  -- Every write, not "*.tmpl": decrypted *.tmpl.age buffers, .chezmoiignore
+  -- and .chezmoitemplates/ partials are gotmpl too. The filetype check is cheap.
   vim.api.nvim_create_autocmd("BufWritePost", {
     group = "chezmoi-template.diagnostics",
-    pattern = "*.tmpl",
     callback = function(ctx)
       if vim.bo[ctx.buf].filetype == "gotmpl" and resolve.is_managed(ctx.file) then
         M.check(ctx.buf)
