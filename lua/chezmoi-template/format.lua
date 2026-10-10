@@ -139,7 +139,8 @@ M.formatter = {
       local real_name = vim.api.nvim_buf_get_name(ctx.buf)
       local name
       if real_name ~= "" then
-        name = real_name:gsub("%.tmpl$", ""):gsub("%.age$", ""):gsub("%.asc$", "")
+        -- Encryption suffixes come last in a source name (foo.tmpl.age)
+        name = real_name:gsub("%.age$", ""):gsub("%.asc$", ""):gsub("%.tmpl$", "")
         -- Ensure JSON targets are formatted as JSONC so the formatter accepts
         -- // comment placeholders
         if is_json then
@@ -155,7 +156,9 @@ M.formatter = {
         if name then
           vim.cmd("noautocmd keepalt file " .. vim.fn.fnameescape(name))
         end
-        local scratch_ft = (target_ft == "json") and "jsonc" or target_ft
+        -- json.jsonc: conform tries jsonc formatters first, then json ones, so
+        -- a formatter configured for json alone is still found.
+        local scratch_ft = (target_ft == "json") and "json.jsonc" or target_ft
         vim.cmd("noautocmd setlocal filetype=" .. scratch_ft)
       end)
       if not ok then

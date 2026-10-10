@@ -429,6 +429,27 @@ do
   eq("suffixless json target gains .jsonc", (_G.captured_name or ""):match("prettierrc%.jsonc$") ~= nil, true)
 end
 
+-- the json scratch keeps json in its compound filetype, so conform still finds
+-- a formatter configured for json alone
+eq("json scratch filetype is json.jsonc", _G.captured_ft, "json.jsonc")
+
+-- encryption suffixes are stripped before .tmpl, so the scratch carries the
+-- deployed extension filename-driven formatters key on
+do
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(buf, vim.fs.normalize(vim.fn.tempname()) .. "/config.yaml.tmpl.age")
+  vim.b[buf].chezmoi_target_ft = "yaml"
+  _G.captured_name = nil
+  local done
+  format.formatter.format(nil, { buf = buf }, { "a: 1" }, function()
+    done = true
+  end)
+  vim.wait(5000, function()
+    return done
+  end)
+  eq("scratch strips .age before .tmpl", (_G.captured_name or ""):match("/config%.yaml$") ~= nil, true)
+end
+
 -- a second format while the first scratch still holds the name fails cleanly
 -- instead of raising E95 and leaking the scratch buffer
 do
