@@ -149,13 +149,19 @@ M.formatter = {
           end
         end
       end
-      vim.api.nvim_buf_call(scratch, function()
+      -- pcall: a second format started before the first finishes asks for the
+      -- same name (E95); fail that one cleanly instead of leaking the scratch.
+      local ok, setup_err = pcall(vim.api.nvim_buf_call, scratch, function()
         if name then
           vim.cmd("noautocmd keepalt file " .. vim.fn.fnameescape(name))
         end
         local scratch_ft = (target_ft == "json") and "jsonc" or target_ft
         vim.cmd("noautocmd setlocal filetype=" .. scratch_ft)
       end)
+      if not ok then
+        vim.api.nvim_buf_delete(scratch, { force = true })
+        return cb(setup_err)
+      end
 
       require("conform").format({ bufnr = scratch, async = true, lsp_format = "fallback" }, function(err, _)
         if err then

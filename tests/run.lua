@@ -429,6 +429,29 @@ do
   eq("suffixless json target gains .jsonc", (_G.captured_name or ""):match("prettierrc%.jsonc$") ~= nil, true)
 end
 
+-- a second format while the first scratch still holds the name fails cleanly
+-- instead of raising E95 and leaking the scratch buffer
+do
+  local dir = vim.fs.normalize(vim.fn.tempname())
+  local holder = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(holder, dir .. "/dot_busy")
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(buf, dir .. "/dot_busy.tmpl")
+  vim.b[buf].chezmoi_target_ft = "sh"
+  local nbufs = #vim.api.nvim_list_bufs()
+  local got_err, done
+  format.formatter.format(nil, { buf = buf }, { "echo hi" }, function(err)
+    got_err, done = err, true
+  end)
+  vim.wait(5000, function()
+    return done
+  end)
+  eq("scratch name collision reports an error", got_err ~= nil, true)
+  eq("scratch name collision leaks no buffer", #vim.api.nvim_list_bufs(), nbufs)
+  vim.api.nvim_buf_delete(holder, { force = true })
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
 local diagnostics = require("chezmoi-template.diagnostics")
 eq(
   "diagnostics parse line:col",
