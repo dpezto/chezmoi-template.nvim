@@ -108,6 +108,7 @@ local function read_post(args)
   vim.api.nvim_buf_set_lines(args.buf, 0, -1, false, lines)
   vim.bo[args.buf].binary = false
   vim.bo[args.buf].modified = false
+  vim.b[args.buf].chezmoi_decrypted = true
 
   -- Resolve the deployed filename so the buffer gets its real filetype;
   -- *.tmpl.age additionally routes through gotmpl with the target injected.
@@ -122,6 +123,11 @@ local function read_post(args)
 end
 
 local function write_cmd(args)
+  -- A failed decrypt leaves the ciphertext in the buffer; encrypting that
+  -- would replace the original with a copy of itself encrypted twice.
+  if not vim.b[args.buf].chezmoi_decrypted then
+    error("chezmoi-template: not saving " .. args.file .. ", it was never decrypted", 0)
+  end
   local lines = vim.api.nvim_buf_get_lines(args.buf, 0, -1, false)
   local text = table.concat(lines, "\n")
   -- POSIX final newline: 'eol' set (default) means the text must end with \n
@@ -162,6 +168,8 @@ function M.setup()
       vim.bo[ctx.buf].binary = true
       vim.bo[ctx.buf].swapfile = false
       vim.bo[ctx.buf].undofile = false
+      -- Saving is refused until read_post has decrypted the file
+      vim.b[ctx.buf].chezmoi_decrypted = false
 
       -- Buffer-local: other encrypted files won't see these events
       vim.api.nvim_create_autocmd("BufReadPost", {

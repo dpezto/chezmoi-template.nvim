@@ -1368,8 +1368,9 @@ do
   os.remove(skip)
 end
 
--- a failed encrypt fails the :write, and an encrypted save replaces the file
--- whole (mode kept) rather than truncating the ciphertext first
+-- encryption never puts a broken copy where the ciphertext was: a failed
+-- decrypt refuses to save, a failed encrypt fails the :write, and the file is
+-- replaced whole (mode kept)
 do
   local uv = vim.uv or vim.loop
   local age = SRC .. "/enc_safety.age"
@@ -1383,9 +1384,16 @@ do
   f:write("CIPHERTEXT")
   f:close()
 
-  fake["decrypt"] = { code = 0, stdout = "plain\n" }
+  fake["decrypt"] = { code = 1, stdout = "", stderr = "no identity" }
+  fake["encrypt"] = { code = 0, stdout = "DOUBLE-ENCRYPTED" }
   vim.cmd.edit(vim.fn.fnameescape(age))
   local b = vim.api.nvim_get_current_buf()
+  eq("undecrypted buffer refuses to save", pcall(vim.cmd.write), false)
+  eq("undecrypted save leaves the ciphertext", disk(), "CIPHERTEXT")
+
+  fake["decrypt"] = { code = 0, stdout = "plain\n" }
+  vim.cmd("edit!")
+  eq("reload after a failed decrypt decrypts", vim.api.nvim_buf_get_lines(b, 0, -1, false), { "plain" })
 
   vim.api.nvim_buf_set_lines(b, 0, -1, false, { "edited" })
   fake["encrypt"] = { code = 1, stdout = "", stderr = "no recipients" }
