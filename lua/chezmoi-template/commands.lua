@@ -205,6 +205,12 @@ end
 
 local function preview_render(src, dest)
   local st = preview_state[src]
+  -- One render in flight per preview: two racing spawns can finish out of
+  -- order and leave the older output on screen. The callback re-runs it.
+  if st and st.rendering then
+    st.pending = true
+    return
+  end
   local text = table.concat(vim.api.nvim_buf_get_lines(src, 0, -1, false), "\n") .. "\n"
   local t0 = uv.hrtime()
   if st then

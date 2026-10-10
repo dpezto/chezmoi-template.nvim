@@ -1073,12 +1073,38 @@ do
   eq("preview refuses non-template buffers", has_note("not a chezmoi template buffer"), true)
 end
 
--- deleting the source tears its preview down: the timer and the template
--- watcher would otherwise render a buffer that no longer exists
+-- one render in flight per preview: a trigger landing mid-render is queued, not
+-- spawned alongside (two racing spawns can finish out of order and leave the
+-- older output up). Renders are held here until released by hand.
 do
   local commands = require("chezmoi-template.commands")
+  local real_exec = resolve.execute_template
+  local held = {}
+  resolve.execute_template = function(_, cb)
+    held[#held + 1] = cb
+  end
+  vim.api.nvim_set_current_buf(tb)
+  vim.cmd("Chezmoi preview")
+  local dest = preview_dest()
   local part = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_name(part, SRC .. "/.chezmoitemplates/serial.tmpl")
+  vim.api.nvim_exec_autocmds("BufWritePost", { buffer = part })
+  eq("render queued while one is in flight", #held, 1)
+  held[1]({ code = 0, stdout = "older\n" })
+  vim.wait(1000, function()
+    return #held == 2
+  end)
+  eq("queued render runs once the first lands", #held, 2)
+  held[2]({ code = 0, stdout = "newer\n" })
+  vim.wait(1000, function()
+    return vim.api.nvim_buf_get_lines(dest, 0, -1, false)[1] == "newer"
+  end)
+  eq("preview settles on the newest render", vim.api.nvim_buf_get_lines(dest, 0, -1, false), { "newer" })
+  resolve.execute_template = real_exec
+  vim.cmd("Chezmoi preview")
+
+  -- deleting the source tears its preview down: the timer and the template
+  -- watcher would otherwise render a buffer that no longer exists
   local wsrc = vim.api.nvim_create_buf(true, false)
   vim.api.nvim_buf_set_name(wsrc, SRC .. "/dot_wiped.tmpl")
   vim.api.nvim_set_current_buf(wsrc)
@@ -1095,6 +1121,24 @@ do
     vim.api.nvim_buf_delete(orphan, { force = true })
   end
   vim.api.nvim_buf_delete(part, { force = true })
+end
+
+-- diagnostics: a superseded check cannot bring back an error the newer one
+-- cleared
+do
+  local real_exec = resolve.execute_template
+  local held = {}
+  resolve.execute_template = function(_, cb)
+    held[#held + 1] = cb
+  end
+  local db = vim.api.nvim_create_buf(false, true)
+  diagnostics.check(db)
+  diagnostics.check(db)
+  held[2]({ code = 0, stdout = "" })
+  held[1]({ code = 1, stderr = "chezmoi: template: default:1: stale" })
+  vim.wait(300)
+  eq("superseded check cannot restore its error", #vim.diagnostic.get(db), 0)
+  resolve.execute_template = real_exec
 end
 
 -- gf follows a {{ template "name" }} argument into .chezmoitemplates/, and the
