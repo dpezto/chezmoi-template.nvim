@@ -958,6 +958,14 @@ clear_notes()
 vim.api.nvim_exec_autocmds("BufReadPost", { buffer = tb })
 eq("notify_on_open fires only once", has_note("applies on save"), false)
 
+local function preview_dest()
+  for _, b in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):match("^chezmoi%-preview://") then
+      return b
+    end
+  end
+end
+
 -- :Chezmoi preview renders into a split, re-renders live as you type, keeps the
 -- last valid render on error, toggles closed
 do
@@ -1036,6 +1044,20 @@ do
   vim.api.nvim_exec_autocmds("BufWritePost", { pattern = SRC .. "/.chezmoitemplates/part.tmpl" })
   eq("template watcher survives a closed preview", vim.api.nvim_buf_is_valid(dest), false)
 
+  -- reopened on the same source: the closed preview's leftover callbacks must
+  -- not tear down the new one, so edits still reach it live
+  vim.api.nvim_set_current_buf(tb)
+  vim.cmd("Chezmoi preview")
+  local reopened = preview_dest()
+  fake["execute-template"] = { code = 0, stdout = "still live\n" }
+  vim.api.nvim_buf_set_lines(tb, 0, -1, false, { "{{ .again }}" })
+  vim.api.nvim_exec_autocmds("TextChanged", { buffer = tb })
+  vim.wait(1000, function()
+    return vim.api.nvim_buf_get_lines(reopened, 0, -1, false)[1] == "still live"
+  end)
+  eq("reopened preview keeps live updates", vim.api.nvim_buf_get_lines(reopened, 0, -1, false), { "still live" })
+  vim.cmd("Chezmoi preview")
+
   -- preview.split = "horizontal" opens a horizontal split instead
   ct.config.preview.split = "horizontal"
   fake["execute-template"] = { code = 0, stdout = "rendered ok\n" }
@@ -1049,6 +1071,30 @@ do
   vim.api.nvim_set_current_buf(plain)
   vim.cmd("Chezmoi preview")
   eq("preview refuses non-template buffers", has_note("not a chezmoi template buffer"), true)
+end
+
+-- deleting the source tears its preview down: the timer and the template
+-- watcher would otherwise render a buffer that no longer exists
+do
+  local commands = require("chezmoi-template.commands")
+  local part = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(part, SRC .. "/.chezmoitemplates/serial.tmpl")
+  local wsrc = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_buf_set_name(wsrc, SRC .. "/dot_wiped.tmpl")
+  vim.api.nvim_set_current_buf(wsrc)
+  vim.bo[wsrc].filetype = "gotmpl"
+  fake["execute-template"] = { code = 0, stdout = "x\n" }
+  vim.cmd("Chezmoi preview")
+  eq("preview open before the source is wiped", commands.preview_is_open(wsrc), true)
+  vim.api.nvim_buf_delete(wsrc, { force = true })
+  eq("wiping the source tears its preview down", commands.preview_is_open(wsrc), false)
+  local ok = pcall(vim.api.nvim_exec_autocmds, "BufWritePost", { buffer = part })
+  eq("template write after the source is gone does not error", ok, true)
+  local orphan = preview_dest()
+  if orphan then
+    vim.api.nvim_buf_delete(orphan, { force = true })
+  end
+  vim.api.nvim_buf_delete(part, { force = true })
 end
 
 -- gf follows a {{ template "name" }} argument into .chezmoitemplates/, and the
