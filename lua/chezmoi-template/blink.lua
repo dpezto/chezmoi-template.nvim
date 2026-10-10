@@ -186,6 +186,7 @@ local BLOCKS = {
 -- Flatten nested template data into dotted paths; tables recurse, arrays and
 -- scalars are leaves. Exposed for tests.
 function M.flatten(tbl, prefix, out)
+  local top = out == nil
   prefix = prefix or ""
   out = out or {}
   for k, v in pairs(tbl) do
@@ -198,9 +199,13 @@ function M.flatten(tbl, prefix, out)
       end
     end
   end
-  table.sort(out, function(a, b)
-    return a.path < b.path
-  end)
+  -- Sort once, at the top: sorting inside every nested map re-sorts the
+  -- whole accumulated list each time.
+  if top then
+    table.sort(out, function(a, b)
+      return a.path < b.path
+    end)
+  end
   return out
 end
 

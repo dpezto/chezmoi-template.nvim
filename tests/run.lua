@@ -584,6 +584,12 @@ eq("blink flatten", blink.flatten({ chezmoi = { hostname = "k", os = "darwin" },
   { path = ".chezmoi.os", value = "darwin" },
   { path = ".roles", value = { "base" } },
 })
+eq("blink flatten sorts across nested maps", blink.flatten({ b = { z = 1, a = 2 }, a = { y = { x = 3 } }, c = 4 }), {
+  { path = ".a.y.x", value = 3 },
+  { path = ".b.a", value = 2 },
+  { path = ".b.z", value = 1 },
+  { path = ".c", value = 4 },
+})
 
 -- blink mutates the items it receives; the cache must not see that
 do
