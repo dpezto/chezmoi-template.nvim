@@ -35,11 +35,17 @@ function M.parse(stderr)
   }
 end
 
+-- buf -> number of the latest check, so a slow older render that finishes
+-- after a newer one cannot bring back an error the newer one cleared.
+local generation = {}
+
 function M.check(buf)
+  local gen = (generation[buf] or 0) + 1
+  generation[buf] = gen
   local text = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n") .. "\n"
   resolve.execute_template(text, function(ret)
     vim.schedule(function()
-      if not vim.api.nvim_buf_is_valid(buf) then
+      if not vim.api.nvim_buf_is_valid(buf) or generation[buf] ~= gen then
         return
       end
       if ret.code == 0 then
@@ -53,9 +59,10 @@ end
 
 function M.setup()
   vim.api.nvim_create_augroup("chezmoi-template.diagnostics", { clear = true })
+  -- Every write, not "*.tmpl": decrypted *.tmpl.age buffers, .chezmoiignore
+  -- and .chezmoitemplates/ partials are gotmpl too. The filetype check is cheap.
   vim.api.nvim_create_autocmd("BufWritePost", {
     group = "chezmoi-template.diagnostics",
-    pattern = "*.tmpl",
     callback = function(ctx)
       if vim.bo[ctx.buf].filetype == "gotmpl" and resolve.is_managed(ctx.file) then
         M.check(ctx.buf)

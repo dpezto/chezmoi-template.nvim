@@ -7,6 +7,8 @@ local M = {}
 
 local resolve = require("chezmoi-template.resolve")
 
+local uv = vim.uv or vim.loop
+
 local function cfg()
   return require("chezmoi-template").config.encryption
 end
@@ -21,16 +23,33 @@ end
 local function encrypt(text, file)
   local ret = resolve.chezmoi({ "encrypt" }, { stdin = text }):wait()
   if ret.code == 0 then
-    local out = io.open(file, "wb")
+    -- Write a sibling temp file and rename it over the original: opening the
+    -- original "wb" truncates it first, so a failed write (disk full, I/O
+    -- error) would leave neither the old nor the new ciphertext. Resolve
+    -- symlinks so the rename replaces the file, not the link. The dot prefix
+    -- keeps chezmoi from reading a leftover temp file as source state.
+    file = uv.fs_realpath(file) or file
+    local tmp = vim.fn.fnamemodify(file, ":h") .. "/." .. vim.fn.fnamemodify(file, ":t") .. ".tmp"
+    local out = io.open(tmp, "wb")
     if not out then
-      return { code = 1, stderr = "cannot open " .. file .. " for writing" }
+      return { code = 1, stderr = "cannot open " .. tmp .. " for writing" }
     end
     -- A failed write (disk full, I/O error) must not report success — the
     -- buffer would be marked unmodified with the file unwritten.
     local wok, werr = out:write(ret.stdout)
     local cok = out:close()
     if not wok or not cok then
+      os.remove(tmp)
       return { code = 1, stderr = "failed writing " .. file .. (werr and ": " .. werr or "") }
+    end
+    local stat = uv.fs_stat(file)
+    if stat then
+      uv.fs_chmod(tmp, stat.mode % 512)
+    end
+    local rok, rerr = uv.fs_rename(tmp, file)
+    if not rok then
+      os.remove(tmp)
+      return { code = 1, stderr = "failed replacing " .. file .. ": " .. tostring(rerr) }
     end
   end
   return ret
@@ -89,6 +108,7 @@ local function read_post(args)
   vim.api.nvim_buf_set_lines(args.buf, 0, -1, false, lines)
   vim.bo[args.buf].binary = false
   vim.bo[args.buf].modified = false
+  vim.b[args.buf].chezmoi_decrypted = true
 
   -- Resolve the deployed filename so the buffer gets its real filetype;
   -- *.tmpl.age additionally routes through gotmpl with the target injected.
@@ -103,6 +123,11 @@ local function read_post(args)
 end
 
 local function write_cmd(args)
+  -- A failed decrypt leaves the ciphertext in the buffer; encrypting that
+  -- would replace the original with a copy of itself encrypted twice.
+  if not vim.b[args.buf].chezmoi_decrypted then
+    error("chezmoi-template: not saving " .. args.file .. ", it was never decrypted", 0)
+  end
   local lines = vim.api.nvim_buf_get_lines(args.buf, 0, -1, false)
   local text = table.concat(lines, "\n")
   -- POSIX final newline: 'eol' set (default) means the text must end with \n
@@ -116,7 +141,53 @@ local function write_cmd(args)
     vim.api.nvim_exec_autocmds("BufWritePost", { buffer = args.buf, modeline = false })
   else
     require("chezmoi-template").notify("error saving file:\n" .. (ret.stderr or ""), vim.log.levels.ERROR)
+    -- Fail the :write itself, so callers (pcall, :wq, other plugins) do not
+    -- take the save as done.
+    error("chezmoi-template: encrypted write failed", 0)
   end
+end
+
+-- Partial writes (:1write!) and appends (:w >>) bypass BufWriteCmd and would
+-- put plaintext into, or over, the ciphertext. A range written to another
+-- file is encrypted like :w {file} of the whole buffer; a range over this
+-- buffer's own file, or any append, has no sensible encrypted form.
+local function partial_write(args)
+  local function real(path)
+    return vim.fs.normalize(vim.fn.resolve(vim.fn.fnamemodify(path, ":p")))
+  end
+  if args.event == "FileAppendCmd" or real(args.file) == real(vim.api.nvim_buf_get_name(args.buf)) then
+    error("chezmoi-template: partial writes and appends are not supported for " .. args.file, 0)
+  end
+  if not vim.b[args.buf].chezmoi_decrypted then
+    error("chezmoi-template: not saving " .. args.file .. ", it was never decrypted", 0)
+  end
+  local first, last = vim.api.nvim_buf_get_mark(args.buf, "[")[1], vim.api.nvim_buf_get_mark(args.buf, "]")[1]
+  local lines = vim.api.nvim_buf_get_lines(args.buf, first - 1, last, false)
+  local ret = encrypt(table.concat(lines, "\n") .. "\n", args.file)
+  if ret.code ~= 0 then
+    require("chezmoi-template").notify("error saving file:\n" .. (ret.stderr or ""), vim.log.levels.ERROR)
+    error("chezmoi-template: encrypted write failed", 0)
+  end
+end
+
+-- Install the buffer-local handlers. Buffer-local so other encrypted files
+-- won't see these events; cleared first because :edit! fires BufReadPre on the
+-- same buffer again, and a second set would decrypt and encrypt twice.
+local function arm(group, buf)
+  vim.api.nvim_clear_autocmds({ group = group, buffer = buf })
+  -- Never persist decrypted content: no swap, no undo history on disk
+  vim.bo[buf].swapfile = false
+  vim.bo[buf].undofile = false
+  vim.api.nvim_create_autocmd("BufWriteCmd", {
+    group = group,
+    buffer = buf,
+    callback = write_cmd,
+  })
+  vim.api.nvim_create_autocmd({ "FileWriteCmd", "FileAppendCmd" }, {
+    group = group,
+    buffer = buf,
+    callback = partial_write,
+  })
 end
 
 function M.setup()
@@ -136,22 +207,30 @@ function M.setup()
       -- here because _activate() no longer touches this module's augroup.
       require("chezmoi-template")._activate()
 
-      -- Never persist decrypted content: no swap, no undo history on disk
+      arm(group, ctx.buf)
       vim.bo[ctx.buf].binary = true
-      vim.bo[ctx.buf].swapfile = false
-      vim.bo[ctx.buf].undofile = false
-
-      -- Buffer-local: other encrypted files won't see these events
+      -- Saving is refused until read_post has decrypted the file
+      vim.b[ctx.buf].chezmoi_decrypted = false
       vim.api.nvim_create_autocmd("BufReadPost", {
         group = group,
         buffer = ctx.buf,
         callback = read_post,
       })
-      vim.api.nvim_create_autocmd("BufWriteCmd", {
-        group = group,
-        buffer = ctx.buf,
-        callback = write_cmd,
-      })
+    end,
+  })
+
+  -- A new encrypted file has nothing to decrypt, but its first save must still
+  -- go through chezmoi encrypt rather than land on disk as plaintext.
+  vim.api.nvim_create_autocmd("BufNewFile", {
+    group = group,
+    pattern = { "*.age", "*.asc" },
+    callback = function(ctx)
+      if not eligible(ctx.file) then
+        return
+      end
+      require("chezmoi-template")._activate()
+      arm(group, ctx.buf)
+      vim.b[ctx.buf].chezmoi_decrypted = true
     end,
   })
 end

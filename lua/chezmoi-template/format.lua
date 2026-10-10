@@ -61,14 +61,17 @@ M.formatter = {
     -- fine pass cannot express — a template glued to a bare word
     -- (`k = {{ .x }}suffix`) or a control-flow pair wrapping content
     -- (`{{ if .on }}k = 1{{ end }}`); neither has a valid token form.
+    -- map: placeholder -> original text. quoted: inline tokens the mask wrapped
+    -- in quotes. cont: continuation lines of a multi-line span.
     local function build_mask(coarse)
-      local masked, map, open = {}, {}, false
+      local masked, map, quoted, cont, open = {}, {}, {}, {}, false
       for i, line in ipairs(lines) do
         local key = prefix .. " " .. sentinel .. i .. (suffix ~= "" and " " .. suffix or "")
         local indent = line:match("^(%s*)")
         if open then -- continuation of a multi-line {{ … }} span
           masked[i] = key
           map[key] = line
+          cont[key] = true
           open = not line:match("}}")
         elseif line:match("{{") and not line:match("}}") then -- opens a multi-line span
           open = true
@@ -107,9 +110,14 @@ M.formatter = {
             -- quoting it there splits the identifier and breaks TOML/JSON.
             local _, q = res:gsub('\\"', ""):gsub('"', "")
             local adjacent = res:sub(-1):match("[%w_%-%.]") or line:sub(t_end + 1, t_end + 1):match("[%w_%-%.]")
-            local k = sentinel .. i .. "_" .. j
-            k = (q % 2 == 0 and not res:match('"$') and not adjacent) and '"' .. k .. '"' or k
+            -- The trailing "_" ends the token, so restore() can tell 1_1 from
+            -- 1_11 even when digits follow it in the line.
+            local k = sentinel .. i .. "_" .. j .. "_"
             map[k] = tmpl
+            if q % 2 == 0 and not res:match('"$') and not adjacent then
+              quoted[k] = true
+              k = '"' .. k .. '"'
+            end
             res = res .. k
             pos = t_end + 1
           end
@@ -118,12 +126,16 @@ M.formatter = {
           masked[i] = line
         end
       end
-      return masked, map
+      return masked, map, quoted, cont
     end
 
-    -- Format in a throwaway buffer named in a temp dir (NOT the chezmoi source
-    -- dir) so *.tmpl autocmds never fire on it; set the name and filetype with
-    -- noautocmd so no LSP attaches to a buffer we delete mid-async.
+    -- Format in a throwaway buffer named after the target in the source file's
+    -- own directory, so formatters find the repo's config (stylua.toml,
+    -- taplo.toml). The name drops .tmpl, so *.tmpl autocmds never fire on it;
+    -- set the name and filetype with noautocmd so no LSP attaches to a buffer
+    -- we delete mid-async. A formatter that needs a real file (stdin = false)
+    -- gets a .conform.* temp file beside it; chezmoi ignores source names
+    -- starting with a dot, so one left by an interrupted format is never applied.
     local function run(masked, cb)
       local scratch = vim.api.nvim_create_buf(false, true)
       vim.bo[scratch].buftype = ""
@@ -131,7 +143,8 @@ M.formatter = {
       local real_name = vim.api.nvim_buf_get_name(ctx.buf)
       local name
       if real_name ~= "" then
-        name = real_name:gsub("%.tmpl$", ""):gsub("%.age$", ""):gsub("%.asc$", "")
+        -- Encryption suffixes come last in a source name (foo.tmpl.age)
+        name = real_name:gsub("%.age$", ""):gsub("%.asc$", ""):gsub("%.tmpl$", "")
         -- Ensure JSON targets are formatted as JSONC so the formatter accepts
         -- // comment placeholders
         if is_json then
@@ -141,13 +154,29 @@ M.formatter = {
           end
         end
       end
-      vim.api.nvim_buf_call(scratch, function()
+      -- pcall: a second format started before the first finishes asks for the
+      -- same name (E95); fail that one cleanly instead of leaking the scratch.
+      local ok, setup_err = pcall(vim.api.nvim_buf_call, scratch, function()
         if name then
           vim.cmd("noautocmd keepalt file " .. vim.fn.fnameescape(name))
         end
-        local scratch_ft = (target_ft == "json") and "jsonc" or target_ft
+        -- json.jsonc: conform tries jsonc formatters first, then json ones, so
+        -- a formatter configured for json alone is still found.
+        local scratch_ft = (target_ft == "json") and "json.jsonc" or target_ft
         vim.cmd("noautocmd setlocal filetype=" .. scratch_ft)
       end)
+      if not ok then
+        vim.api.nvim_buf_delete(scratch, { force = true })
+        return cb(setup_err)
+      end
+      -- A target with no formatter (gitconfig, ghostty) has nothing to do:
+      -- report that as no output rather than conform's "No formatters
+      -- available" error, which no masking strength can fix.
+      local formatters, lsp = require("conform").list_formatters_to_run(scratch)
+      if #formatters == 0 and not lsp then
+        vim.api.nvim_buf_delete(scratch, { force = true })
+        return cb(nil, nil)
+      end
 
       require("conform").format({ bufnr = scratch, async = true, lsp_format = "fallback" }, function(err, _)
         if err then
@@ -162,11 +191,13 @@ M.formatter = {
       end)
     end
 
-    local function restore(formatted, map)
-      local keys = vim.tbl_keys(map)
-      table.sort(keys, function(a, b)
-        return #a > #b
-      end)
+    -- Returns the restored lines, or nil when the formatter output cannot be
+    -- mapped back exactly: a placeholder dropped, duplicated, or rewritten
+    -- (an inline token's quotes escaped or removed). Accepting that output
+    -- would silently delete template actions.
+    local token_pat = "([\"']?)(" .. sentinel .. "%d+_%d+_)%1"
+    local function restore(formatted, map, quoted, cont)
+      local expected, restored = vim.tbl_count(map), 0
 
       -- Whole-line placeholders get the formatter's indent, except closing
       -- directives: formatters misplace a comment sitting before a closing
@@ -179,6 +210,7 @@ M.formatter = {
         local stripped = line:sub(#indent + 1)
         local tmpl = map[stripped]
         if tmpl then
+          restored = restored + 1
           -- Depth of this line = stack size before its own pops/pushes;
           -- end/else belong to their opener's level.
           local depth = #stack
@@ -202,42 +234,69 @@ M.formatter = {
             end
             first = false
           end
-          -- Directive-interior indent, only for column-0 `{{-` directives
-          -- (data-munging header blocks): encode template nesting depth as
-          -- padding INSIDE the action (1 space + 2 per level). Directives that
-          -- participate in code layout (non-empty leading indent) keep their
-          -- single space — the code indent already shows structure.
-          if indent_directives and indent == "" and tmpl:match("^{{%-%s") then
-            tmpl = tmpl:gsub("^{{%-%s+", "{{-" .. string.rep(" ", 1 + 2 * depth), 1)
+          if cont[stripped] then
+            -- Inside a multi-line action: target-language indent would change
+            -- the action itself (a raw string's interior lines), so verbatim.
+            final[#final + 1] = tmpl
+          else
+            -- Directive-interior indent, only for column-0 `{{-` directives
+            -- (data-munging header blocks): encode template nesting depth as
+            -- padding INSIDE the action (1 space + 2 per level). Directives that
+            -- participate in code layout (non-empty leading indent) keep their
+            -- single space — the code indent already shows structure.
+            if indent_directives and indent == "" and tmpl:match("^{{%-%s") then
+              tmpl = tmpl:gsub("^{{%-%s+", "{{-" .. string.rep(" ", 1 + 2 * depth), 1)
+            end
+            final[#final + 1] = indent .. tmpl
           end
-          final[#final + 1] = indent .. tmpl
         else
-          for _, k in ipairs(keys) do
-            line = line:gsub(k, function()
-              return map[k]
-            end)
+          -- One pass per line. The mask's own quotes come off whichever quote
+          -- character the formatter settled on; a bare token keeps whatever
+          -- quotes surround it.
+          line = line:gsub(token_pat, function(q, tok)
+            local orig = map[tok]
+            if not orig or (quoted[tok] and q == "") then
+              return nil
+            end
+            restored = restored + 1
+            return quoted[tok] and orig or q .. orig .. q
+          end)
+          if line:find(sentinel, 1, true) then
+            return nil
           end
           final[#final + 1] = line
         end
       end
 
-      callback(nil, final)
+      if restored ~= expected then
+        return nil
+      end
+      return final
     end
 
-    local fine, fine_map = build_mask(false)
+    local fine, fine_map, fine_quoted, fine_cont = build_mask(false)
     run(fine, function(err, formatted)
-      if not err then
-        return restore(formatted, fine_map)
+      if not err and not formatted then
+        return callback(nil, lines)
       end
-      -- The fine mask produced something the target formatter rejects. Retry
-      -- with every template line inert, so one unmaskable line cannot block
-      -- formatting the rest of the file.
-      local coarse, coarse_map = build_mask(true)
+      local final = not err and restore(formatted, fine_map, fine_quoted, fine_cont)
+      if final then
+        return callback(nil, final)
+      end
+      -- The fine mask produced something the target formatter rejects, or
+      -- output its tokens cannot be restored from. Retry with every template
+      -- line inert, so one unmaskable line cannot block formatting the rest
+      -- of the file.
+      local coarse, coarse_map, coarse_quoted, coarse_cont = build_mask(true)
       run(coarse, function(coarse_err, coarse_formatted)
         if coarse_err then
           return callback(coarse_err)
         end
-        restore(coarse_formatted, coarse_map)
+        local coarse_final = restore(coarse_formatted, coarse_map, coarse_quoted, coarse_cont)
+        if not coarse_final then
+          return callback("chezmoi: formatter output lost template placeholders")
+        end
+        callback(nil, coarse_final)
       end)
     end)
   end,

@@ -186,6 +186,7 @@ local BLOCKS = {
 -- Flatten nested template data into dotted paths; tables recurse, arrays and
 -- scalars are leaves. Exposed for tests.
 function M.flatten(tbl, prefix, out)
+  local top = out == nil
   prefix = prefix or ""
   out = out or {}
   for k, v in pairs(tbl) do
@@ -198,9 +199,13 @@ function M.flatten(tbl, prefix, out)
       end
     end
   end
-  table.sort(out, function(a, b)
-    return a.path < b.path
-  end)
+  -- Sort once, at the top: sorting inside every nested map re-sorts the
+  -- whole accumulated list each time.
+  if top then
+    table.sort(out, function(a, b)
+      return a.path < b.path
+    end)
+  end
   return out
 end
 
@@ -343,7 +348,9 @@ local function ts_where()
     if not parser then
       return nil
     end
-    parser:parse(true)
+    -- Root tree only: classifying the cursor needs no injected languages, and
+    -- parse(true) would parse the whole injected target document too.
+    parser:parse()
     local node = vim.treesitter.get_node()
     if not node then
       return "text"
@@ -384,7 +391,9 @@ function M:get_completions(_, callback)
   else
     items = block_items()
   end
-  callback({ is_incomplete_forward = false, is_incomplete_backward = false, items = items })
+  -- blink mutates returned items (score_offset, cursor_column), so hand it a
+  -- copy rather than the cached tables.
+  callback({ is_incomplete_forward = false, is_incomplete_backward = false, items = vim.deepcopy(items) })
 end
 
 return M

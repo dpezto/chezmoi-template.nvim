@@ -40,6 +40,10 @@ end
 
 -- chezmoi apply, whole state or a single target (async)
 local function apply(target)
+  -- vim.system throws on a missing executable; report it like any failure
+  if not resolve.has_chezmoi() then
+    return notify("apply failed: chezmoi executable not found", vim.log.levels.ERROR)
+  end
   local args = { "apply" }
   if require("chezmoi-template").config.apply.force then
     table.insert(args, "--force")
@@ -125,19 +129,30 @@ end
 -- this renders to" — the one comparison git tooling cannot make, since the
 -- deployed state is in no repository.
 -- state: src buf -> { dest, diff, target, winbar, timer, tick, rendering,
---                     pending, live, slow_ms, last_output, stale }
+--                     pending, live, slow_ms, last_output, stale, autocmds }
 local preview_state = {}
 
--- Freeing a preview's window handle + debounce timer, from either the toggle-off
--- path or when the dest buffer turns out to be gone.
-local function preview_teardown(src)
-  local st = preview_state[src]
-  if st and st.timer then
+-- Freeing a preview's debounce timer and autocmds, from either the toggle-off
+-- path or when the dest or source buffer goes away. st names the preview to
+-- free: a callback left over from a closed preview must not tear down the one
+-- reopened on the same source since.
+local function preview_teardown(src, st)
+  st = st or preview_state[src]
+  if not st then
+    return
+  end
+  if st.timer then
     st.timer:stop()
     st.timer:close()
     st.timer = nil
   end
-  preview_state[src] = nil
+  for _, id in ipairs(st.autocmds or {}) do
+    pcall(vim.api.nvim_del_autocmd, id)
+  end
+  st.autocmds = {}
+  if preview_state[src] == st then
+    preview_state[src] = nil
+  end
 end
 
 -- The preview's winbar: whatever the pane is called, plus any state a reader
@@ -194,6 +209,12 @@ end
 
 local function preview_render(src, dest)
   local st = preview_state[src]
+  -- One render in flight per preview: two racing spawns can finish out of
+  -- order and leave the older output on screen. The callback re-runs it.
+  if st and st.rendering then
+    st.pending = true
+    return
+  end
   local text = table.concat(vim.api.nvim_buf_get_lines(src, 0, -1, false), "\n") .. "\n"
   local t0 = uv.hrtime()
   if st then
@@ -246,7 +267,8 @@ local function preview_render(src, dest)
         set_stale(st, dest, true)
       end
       -- A change landed mid-render — re-run so the preview settles on it.
-      if st and st.pending then
+      -- Not for a torn-down preview: its source may be gone.
+      if st and st.pending and preview_state[src] == st then
         st.pending = false
         preview_render(src, dest)
       end
@@ -345,6 +367,7 @@ local function preview_toggle()
     -- Configured off, not backed off, but a reader still needs to know why the
     -- render is not keeping up with the keystrokes.
     paused = not cfg.live,
+    autocmds = {},
   }
   preview_state[src] = st
   refresh_winbar(st, dest)
@@ -352,12 +375,12 @@ local function preview_toggle()
   -- One autocmd on all three events: live edits debounce-render, and BufWritePost
   -- renders once live has been dropped to on-write (config or backoff), so the
   -- single callback covers both modes without re-registering.
-  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "BufWritePost" }, {
+  st.autocmds[#st.autocmds + 1] = vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "BufWritePost" }, {
     group = "chezmoi-template.commands",
     buffer = src,
     callback = function(ev)
       if not vim.api.nvim_buf_is_valid(dest) then
-        preview_teardown(src)
+        preview_teardown(src, st)
         return true -- preview closed; drop the autocmd
       end
       if st.live then
@@ -379,7 +402,7 @@ local function preview_toggle()
   -- dependency tracking. An unrelated write costs one spawn and the last_output
   -- check above keeps the buffer untouched; parse the include names at toggle
   -- time if that ever shows up in a profile.
-  vim.api.nvim_create_autocmd("BufWritePost", {
+  st.autocmds[#st.autocmds + 1] = vim.api.nvim_create_autocmd("BufWritePost", {
     group = "chezmoi-template.commands",
     callback = function(ev)
       -- Path match, not an autocmd pattern: a raw ev.file is backslashed on
@@ -388,7 +411,7 @@ local function preview_toggle()
         return
       end
       if not vim.api.nvim_buf_is_valid(dest) then
-        preview_teardown(src)
+        preview_teardown(src, st)
         return true -- preview closed; drop the autocmd
       end
       preview_render(src, dest)
@@ -397,11 +420,21 @@ local function preview_toggle()
 
   -- Closing the preview (q / :q) wipes dest — free the timer right away instead
   -- of waiting for the next keystroke to notice.
-  vim.api.nvim_create_autocmd("BufWipeout", {
+  st.autocmds[#st.autocmds + 1] = vim.api.nvim_create_autocmd("BufWipeout", {
     group = "chezmoi-template.commands",
     buffer = dest,
     callback = function()
-      preview_teardown(src)
+      preview_teardown(src, st)
+    end,
+  })
+
+  -- Deleting the source leaves nothing to render; without this the timer and
+  -- the template watcher above outlive it and render an invalid buffer.
+  st.autocmds[#st.autocmds + 1] = vim.api.nvim_create_autocmd({ "BufDelete", "BufWipeout" }, {
+    group = "chezmoi-template.commands",
+    buffer = src,
+    callback = function()
+      preview_teardown(src, st)
     end,
   })
 

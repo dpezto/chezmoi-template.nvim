@@ -12,17 +12,32 @@ end
 -- logic without any external formatter binaries. Captures the masked scratch
 -- buffer for assertions. Setting _G.conform_reject to a predicate over the
 -- masked lines makes the stub reject that buffer, which is how the coarse
--- fallback pass is exercised without a real formatter.
+-- fallback pass is exercised without a real formatter. _G.conform_transform,
+-- a function over the masked lines, stands in for a formatter that rewrites
+-- them (requoting, reindenting, dropping lines). _G.conform_none makes the
+-- stub report no formatter for the buffer.
 _G.captured_masked = nil
 _G.conform_reject = nil
+_G.conform_transform = nil
+_G.conform_none = nil
 package.preload["conform"] = function()
   local M = { formatters = {}, formatters_by_ft = {} }
+  function M.list_formatters_to_run()
+    if _G.conform_none then
+      return {}, false
+    end
+    return { { name = "stub", available = true } }, false
+  end
   function M.format(opts, cb)
     local masked = vim.api.nvim_buf_get_lines(opts.bufnr, 0, -1, false)
     _G.captured_masked = masked
     _G.captured_name = vim.api.nvim_buf_get_name(opts.bufnr)
+    _G.captured_ft = vim.bo[opts.bufnr].filetype
     if _G.conform_reject and _G.conform_reject(masked) then
       return cb("stub: masked buffer rejected")
+    end
+    if _G.conform_transform then
+      vim.api.nvim_buf_set_lines(opts.bufnr, 0, -1, false, _G.conform_transform(masked))
     end
     cb(nil, false)
   end

@@ -217,6 +217,32 @@ run_case("coarse fallback on unmaskable lines", "toml", {
 end)
 _G.conform_reject = nil
 
+-- a target with no formatter returns the input untouched, without an error
+-- and without running conform (no second, coarse attempt either)
+do
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.b[buf].chezmoi_target_ft = "gitconfig"
+  _G.conform_none = true
+  _G.captured_masked = nil
+  local input = { "[user]", "  name = {{ .name }}" }
+  local got_err, got, done
+  format.formatter.format(nil, { buf = buf }, input, function(err, out)
+    got_err, got, done = err, out, true
+  end)
+  vim.wait(5000, function()
+    return done
+  end)
+  _G.conform_none = nil
+  local ok = done and got_err == nil and vim.deep_equal(got, input) and _G.captured_masked == nil
+  if not ok then
+    failures = failures + 1
+    print("FAIL no formatter returns the input untouched: " .. vim.inspect({ got_err, got, _G.captured_masked }))
+  else
+    print("ok   no formatter returns the input untouched")
+  end
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
 -- both passes failing still surfaces the error rather than silently mangling
 do
   local buf = vim.api.nvim_create_buf(false, true)
@@ -273,6 +299,85 @@ run_case("gotmpl target passes through", "gotmpl", {
   "whatever   spacing",
   "{{- end }}",
 })
+
+-- 13. a formatter that prefers single quotes (StyLua, prettier singleQuote)
+-- requotes the masked value; the action must come back, not 'CHEZMOI_TMPL_…'
+_G.conform_transform = function(masked)
+  return vim.tbl_map(function(l)
+    return (l:gsub('"', "'"))
+  end, masked)
+end
+run_case("requoted token restored", "lua", {
+  "local host = {{ .hostname | quote }}",
+}, {
+  "local host = {{ .hostname | quote }}",
+})
+
+-- 14. a formatter that drops the mask's quotes entirely: the fine pass cannot
+-- tell its token from content, so it falls back to the coarse pass
+_G.conform_transform = function(masked)
+  return vim.tbl_map(function(l)
+    return (l:gsub('"', ""))
+  end, masked)
+end
+run_case("unquoted token falls back to coarse", "lua", {
+  "local host = {{ .hostname | quote }}",
+}, {
+  "local host = {{ .hostname | quote }}",
+})
+
+-- 15. interior lines of a multi-line action are part of the action (here a raw
+-- string), so the formatter's indent must not reach them
+_G.conform_transform = function(masked)
+  return vim.tbl_map(function(l)
+    return "  " .. l
+  end, masked)
+end
+run_case("multi-line span interior verbatim", "sh", {
+  "{{- $x := `a",
+  "b` }}",
+  "echo hi",
+}, {
+  "  {{- $x := `a",
+  "b` }}",
+  "  echo hi",
+})
+_G.conform_transform = nil
+
+-- 16. a token followed by digits: 1_1 must not swallow them as 1_12
+run_case("token followed by digits", "toml", {
+  "[d]",
+  'k = "v{{ .n }}2"',
+}, {
+  "[d]",
+  'k = "v{{ .n }}2"',
+})
+
+-- 17. a formatter that deletes placeholder lines in both passes: an error, never
+-- output with the template actions missing
+do
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.b[buf].chezmoi_target_ft = "sh"
+  _G.conform_transform = function(masked)
+    return vim.tbl_filter(function(l)
+      return not l:find("CHEZMOI_TMPL_", 1, true)
+    end, masked)
+  end
+  local got_err, got_out, done
+  format.formatter.format(nil, { buf = buf }, { "{{- if .x }}", "echo hi", "{{- end }}" }, function(err, out)
+    got_err, got_out, done = err, out, true
+  end)
+  vim.wait(5000, function()
+    return done
+  end)
+  _G.conform_transform = nil
+  if got_err and not got_out then
+    print("ok   dropped placeholders report an error")
+  else
+    failures = failures + 1
+    print("FAIL dropped placeholders report an error: " .. vim.inspect(got_out))
+  end
+end
 
 -- Pure-function cases -------------------------------------------------------
 
@@ -348,6 +453,50 @@ do
     return done
   end)
   eq("suffixless json target gains .jsonc", (_G.captured_name or ""):match("prettierrc%.jsonc$") ~= nil, true)
+end
+
+-- the json scratch keeps json in its compound filetype, so conform still finds
+-- a formatter configured for json alone
+eq("json scratch filetype is json.jsonc", _G.captured_ft, "json.jsonc")
+
+-- encryption suffixes are stripped before .tmpl, so the scratch carries the
+-- deployed extension filename-driven formatters key on
+do
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(buf, vim.fs.normalize(vim.fn.tempname()) .. "/config.yaml.tmpl.age")
+  vim.b[buf].chezmoi_target_ft = "yaml"
+  _G.captured_name = nil
+  local done
+  format.formatter.format(nil, { buf = buf }, { "a: 1" }, function()
+    done = true
+  end)
+  vim.wait(5000, function()
+    return done
+  end)
+  eq("scratch strips .age before .tmpl", vim.fs.normalize(_G.captured_name or ""):match("/config%.yaml$") ~= nil, true)
+end
+
+-- a second format while the first scratch still holds the name fails cleanly
+-- instead of raising E95 and leaking the scratch buffer
+do
+  local dir = vim.fs.normalize(vim.fn.tempname())
+  local holder = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(holder, dir .. "/dot_busy")
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(buf, dir .. "/dot_busy.tmpl")
+  vim.b[buf].chezmoi_target_ft = "sh"
+  local nbufs = #vim.api.nvim_list_bufs()
+  local got_err, done
+  format.formatter.format(nil, { buf = buf }, { "echo hi" }, function(err)
+    got_err, done = err, true
+  end)
+  vim.wait(5000, function()
+    return done
+  end)
+  eq("scratch name collision reports an error", got_err ~= nil, true)
+  eq("scratch name collision leaks no buffer", #vim.api.nvim_list_bufs(), nbufs)
+  vim.api.nvim_buf_delete(holder, { force = true })
+  vim.api.nvim_buf_delete(buf, { force = true })
 end
 
 local diagnostics = require("chezmoi-template.diagnostics")
@@ -461,6 +610,29 @@ eq("blink flatten", blink.flatten({ chezmoi = { hostname = "k", os = "darwin" },
   { path = ".chezmoi.os", value = "darwin" },
   { path = ".roles", value = { "base" } },
 })
+eq("blink flatten sorts across nested maps", blink.flatten({ b = { z = 1, a = 2 }, a = { y = { x = 3 } }, c = 4 }), {
+  { path = ".a.y.x", value = 3 },
+  { path = ".b.a", value = 2 },
+  { path = ".b.z", value = 1 },
+  { path = ".c", value = 4 },
+})
+
+-- blink mutates the items it receives; the cache must not see that
+do
+  local src = blink.new()
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "" })
+  local first, second
+  src:get_completions(nil, function(res)
+    first = res.items
+  end)
+  first[1].score_offset = 99
+  src:get_completions(nil, function(res)
+    second = res.items
+  end)
+  eq("blink items are copies of the cache", second[1].score_offset, nil)
+end
 
 local resolve = require("chezmoi-template.resolve")
 eq("resolve_path attributes", resolve.resolve_path("private_dot_zshrc.tmpl"), ".zshrc")
@@ -542,15 +714,17 @@ end
 local fake = {} -- subcommand -> canned vim.system result
 local spawns = {} -- subcommand -> call count
 local sent = {} -- subcommand -> full cmd array of the last spawn (for flag asserts)
+local stdin = {} -- subcommand -> stdin of the last spawn
 local real_system = vim.system
 ---@diagnostic disable-next-line: duplicate-set-field
-vim.system = function(cmd, _, cb)
+vim.system = function(cmd, opts, cb)
   if cmd[1] ~= "chezmoi" then
-    return real_system(cmd, _, cb)
+    return real_system(cmd, opts, cb)
   end
   local key = cmd[2]
   spawns[key] = (spawns[key] or 0) + 1
   sent[key] = cmd
+  stdin[key] = opts and opts.stdin
   local ret = vim.deepcopy(fake[key] or { code = 1, stdout = "", stderr = "no fake for " .. key })
   -- a canned reply can take its time, for the paths that react to a slow spawn
   if ret.delay_ms then
@@ -833,6 +1007,14 @@ clear_notes()
 vim.api.nvim_exec_autocmds("BufReadPost", { buffer = tb })
 eq("notify_on_open fires only once", has_note("applies on save"), false)
 
+local function preview_dest()
+  for _, b in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):match("^chezmoi%-preview://") then
+      return b
+    end
+  end
+end
+
 -- :Chezmoi preview renders into a split, re-renders live as you type, keeps the
 -- last valid render on error, toggles closed
 do
@@ -911,6 +1093,20 @@ do
   vim.api.nvim_exec_autocmds("BufWritePost", { pattern = SRC .. "/.chezmoitemplates/part.tmpl" })
   eq("template watcher survives a closed preview", vim.api.nvim_buf_is_valid(dest), false)
 
+  -- reopened on the same source: the closed preview's leftover callbacks must
+  -- not tear down the new one, so edits still reach it live
+  vim.api.nvim_set_current_buf(tb)
+  vim.cmd("Chezmoi preview")
+  local reopened = preview_dest()
+  fake["execute-template"] = { code = 0, stdout = "still live\n" }
+  vim.api.nvim_buf_set_lines(tb, 0, -1, false, { "{{ .again }}" })
+  vim.api.nvim_exec_autocmds("TextChanged", { buffer = tb })
+  vim.wait(1000, function()
+    return vim.api.nvim_buf_get_lines(reopened, 0, -1, false)[1] == "still live"
+  end)
+  eq("reopened preview keeps live updates", vim.api.nvim_buf_get_lines(reopened, 0, -1, false), { "still live" })
+  vim.cmd("Chezmoi preview")
+
   -- preview.split = "horizontal" opens a horizontal split instead
   ct.config.preview.split = "horizontal"
   fake["execute-template"] = { code = 0, stdout = "rendered ok\n" }
@@ -924,6 +1120,99 @@ do
   vim.api.nvim_set_current_buf(plain)
   vim.cmd("Chezmoi preview")
   eq("preview refuses non-template buffers", has_note("not a chezmoi template buffer"), true)
+end
+
+-- one render in flight per preview: a trigger landing mid-render is queued, not
+-- spawned alongside (two racing spawns can finish out of order and leave the
+-- older output up). Renders are held here until released by hand.
+do
+  local commands = require("chezmoi-template.commands")
+  local real_exec = resolve.execute_template
+  local held = {}
+  resolve.execute_template = function(_, cb)
+    held[#held + 1] = cb
+  end
+  vim.api.nvim_set_current_buf(tb)
+  vim.cmd("Chezmoi preview")
+  local dest = preview_dest()
+  local part = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(part, SRC .. "/.chezmoitemplates/serial.tmpl")
+  vim.api.nvim_exec_autocmds("BufWritePost", { buffer = part })
+  eq("render queued while one is in flight", #held, 1)
+  held[1]({ code = 0, stdout = "older\n" })
+  vim.wait(1000, function()
+    return #held == 2
+  end)
+  eq("queued render runs once the first lands", #held, 2)
+  held[2]({ code = 0, stdout = "newer\n" })
+  vim.wait(1000, function()
+    return vim.api.nvim_buf_get_lines(dest, 0, -1, false)[1] == "newer"
+  end)
+  eq("preview settles on the newest render", vim.api.nvim_buf_get_lines(dest, 0, -1, false), { "newer" })
+  resolve.execute_template = real_exec
+  vim.cmd("Chezmoi preview")
+
+  -- deleting the source tears its preview down: the timer and the template
+  -- watcher would otherwise render a buffer that no longer exists
+  local wsrc = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_buf_set_name(wsrc, SRC .. "/dot_wiped.tmpl")
+  vim.api.nvim_set_current_buf(wsrc)
+  vim.bo[wsrc].filetype = "gotmpl"
+  fake["execute-template"] = { code = 0, stdout = "x\n" }
+  vim.cmd("Chezmoi preview")
+  eq("preview open before the source is wiped", commands.preview_is_open(wsrc), true)
+  vim.api.nvim_buf_delete(wsrc, { force = true })
+  eq("wiping the source tears its preview down", commands.preview_is_open(wsrc), false)
+  local ok = pcall(vim.api.nvim_exec_autocmds, "BufWritePost", { buffer = part })
+  eq("template write after the source is gone does not error", ok, true)
+  local orphan = preview_dest()
+  if orphan then
+    vim.api.nvim_buf_delete(orphan, { force = true })
+  end
+  vim.api.nvim_buf_delete(part, { force = true })
+end
+
+-- diagnostics: a superseded check cannot bring back an error the newer one
+-- cleared, and every gotmpl buffer is checked on write, not only *.tmpl names
+do
+  local real_exec = resolve.execute_template
+  local held = {}
+  resolve.execute_template = function(_, cb)
+    held[#held + 1] = cb
+  end
+  local db = vim.api.nvim_create_buf(false, true)
+  diagnostics.check(db)
+  diagnostics.check(db)
+  held[2]({ code = 0, stdout = "" })
+  held[1]({ code = 1, stderr = "chezmoi: template: default:1: stale" })
+  vim.wait(300)
+  eq("superseded check cannot restore its error", #vim.diagnostic.get(db), 0)
+  resolve.execute_template = real_exec
+
+  local eb = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(eb, SRC .. "/encrypted_diag.tmpl.age")
+  vim.bo[eb].filetype = "gotmpl"
+  fake["execute-template"] = { code = 1, stderr = "chezmoi: template: default:1: boom" }
+  vim.api.nvim_exec_autocmds("BufWritePost", { buffer = eb })
+  vim.wait(1000, function()
+    return #vim.diagnostic.get(eb) > 0
+  end)
+  eq("diagnostics check gotmpl buffers not named *.tmpl", #vim.diagnostic.get(eb), 1)
+  fake["execute-template"] = { code = 0, stdout = "rendered ok\n" }
+end
+
+-- :Chezmoi! apply with no chezmoi on PATH reports it instead of throwing from
+-- the spawn
+do
+  local real_has = resolve.has_chezmoi
+  resolve.has_chezmoi = function()
+    return false
+  end
+  clear_notes()
+  local ok = pcall(vim.cmd, "Chezmoi! apply")
+  resolve.has_chezmoi = real_has
+  eq("apply without chezmoi does not throw", ok, true)
+  eq("apply without chezmoi is reported", has_note("chezmoi executable not found"), true)
 end
 
 -- gf follows a {{ template "name" }} argument into .chezmoitemplates/, and the
@@ -1292,6 +1581,18 @@ do
   picker._seed_preview(pv, "/outside/dot_x.tmpl")
   eq("seed_preview clears stale vars for unmanaged paths", vim.b[pv].chezmoi_target_ft, nil)
 
+  -- a running highlighter restarts in the language a plain file already had;
+  -- only templates switch to gotmpl (absent here, so that start may fail)
+  local lp = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(lp, 0, -1, false, { "local x = 1" })
+  vim.treesitter.start(lp, "lua")
+  picker._seed_preview(lp, SRC .. "/dot_config/init.lua")
+  local hl = vim.treesitter.highlighter.active[lp]
+  eq("seed_preview keeps a plain file's language", hl and hl.tree:lang(), "lua")
+  picker._seed_preview(lp, SRC .. "/dot_config/init.lua.tmpl")
+  hl = vim.treesitter.highlighter.active[lp]
+  eq("seed_preview restarts templates as gotmpl", hl == nil or hl.tree:lang() == "gotmpl", true)
+
   -- select fallback via the string shorthand (kept file reused by the
   -- backend-stub block below, which removes it)
   local pick_me = SRC .. "/dot_pick_me.tmpl"
@@ -1366,6 +1667,100 @@ do
   eq("excluded *.age opens raw", vim.api.nvim_buf_get_lines(sb, 0, -1, false), { "PLAIN" })
   vim.api.nvim_buf_delete(sb, { force = true })
   os.remove(skip)
+end
+
+-- encryption never puts plaintext or a broken copy where the ciphertext was: a
+-- failed decrypt refuses to save, a failed encrypt fails the :write, partial
+-- writes and appends are refused, a reload does not stack handlers, the file is
+-- replaced whole (mode kept), and a new file still goes through chezmoi encrypt
+do
+  local uv = vim.uv or vim.loop
+  local age = SRC .. "/enc_safety.age"
+  local function disk(path)
+    local rf = assert(io.open(path or age, "rb"))
+    local d = rf:read("*a")
+    rf:close()
+    return d
+  end
+  local f = assert(io.open(age, "wb"))
+  f:write("CIPHERTEXT")
+  f:close()
+
+  fake["decrypt"] = { code = 1, stdout = "", stderr = "no identity" }
+  fake["encrypt"] = { code = 0, stdout = "DOUBLE-ENCRYPTED" }
+  vim.cmd.edit(vim.fn.fnameescape(age))
+  local b = vim.api.nvim_get_current_buf()
+  eq("undecrypted buffer refuses to save", pcall(vim.cmd.write), false)
+  eq("undecrypted save leaves the ciphertext", disk(), "CIPHERTEXT")
+  eq(
+    "undecrypted buffer refuses a range write",
+    pcall(vim.cmd, "1write " .. vim.fn.fnameescape(SRC .. "/enc_range.age")),
+    false
+  )
+
+  local function handlers()
+    return #vim.api.nvim_get_autocmds({ group = "chezmoi-template.encryption", buffer = b })
+  end
+  fake["decrypt"] = { code = 0, stdout = "plain\n" }
+  vim.cmd("edit!")
+  local n = handlers()
+  vim.cmd("edit!")
+  eq("reload does not stack encryption handlers", handlers(), n)
+  eq("reload after a failed decrypt decrypts", vim.api.nvim_buf_get_lines(b, 0, -1, false), { "plain" })
+
+  vim.api.nvim_buf_set_lines(b, 0, -1, false, { "edited", "two lines, so :1write is partial" })
+  fake["encrypt"] = { code = 1, stdout = "", stderr = "no recipients" }
+  clear_notes()
+  eq("failed encrypt fails the write", pcall(vim.cmd.write), false)
+  eq("failed encrypt is reported", has_note("no recipients"), true)
+  eq("failed encrypt keeps the buffer modified", vim.bo[b].modified, true)
+  eq("failed encrypt leaves the file alone", disk(), "CIPHERTEXT")
+
+  fake["encrypt"] = { code = 0, stdout = "ENCRYPTED" }
+  eq("partial write is refused", pcall(vim.cmd, "1write!"), false)
+  eq("append is refused", pcall(vim.cmd, "write >>"), false)
+  eq("refused writes leave the file alone", disk(), "CIPHERTEXT")
+
+  local range = SRC .. "/enc_range.age"
+  vim.cmd("1write " .. vim.fn.fnameescape(range))
+  eq("range to another file is encrypted", disk(range), "ENCRYPTED")
+  eq("range write encrypts only the range", stdin["encrypt"], "edited\n")
+  eq("range write leaves the buffer modified", vim.bo[b].modified, true)
+  os.remove(range)
+  fake["encrypt"] = { code = 1, stdout = "", stderr = "no recipients" }
+  clear_notes()
+  eq("failed range encrypt fails the write", pcall(vim.cmd, "1write " .. vim.fn.fnameescape(range)), false)
+  eq("failed range encrypt is reported", has_note("no recipients"), true)
+  eq("failed range encrypt writes nothing", uv.fs_stat(range), nil)
+  fake["encrypt"] = { code = 0, stdout = "ENCRYPTED" }
+
+  uv.fs_chmod(age, 384) -- 0600
+  vim.cmd.write()
+  eq("encrypted write replaces the file", disk(), "ENCRYPTED")
+  eq("encrypted write leaves no temp file", uv.fs_stat(SRC .. "/.enc_safety.age.tmp"), nil)
+  if vim.fn.has("win32") == 0 then
+    eq("encrypted write keeps the file mode", uv.fs_stat(age).mode % 512, 384)
+  end
+  vim.api.nvim_buf_delete(b, { force = true })
+  os.remove(age)
+
+  local new = SRC .. "/enc_new.age"
+  vim.cmd.edit(vim.fn.fnameescape(new))
+  local nb = vim.api.nvim_get_current_buf()
+  eq("new encrypted file gets no swapfile", vim.bo[nb].swapfile, false)
+  vim.api.nvim_buf_set_lines(nb, 0, -1, false, { "fresh secret" })
+  vim.cmd.write()
+  eq("new encrypted file is written encrypted", disk(new), "ENCRYPTED")
+  vim.api.nvim_buf_delete(nb, { force = true })
+  os.remove(new)
+
+  -- disabled, excluded, unmanaged: a new *.age is left to the normal write
+  local plain_new = SRC .. "/skipme_new.age"
+  vim.cmd.edit(vim.fn.fnameescape(plain_new))
+  local pb = vim.api.nvim_get_current_buf()
+  local armed = vim.api.nvim_get_autocmds({ group = "chezmoi-template.encryption", buffer = pb })
+  eq("excluded new *.age gets no encryption handler", #armed, 0)
+  vim.api.nvim_buf_delete(pb, { force = true })
 end
 
 -- encryption must survive the two-call setup order: the plugin/ bootstrap runs
@@ -1781,6 +2176,47 @@ do
   require("chezmoi-template.inject").seed_buffer(yb, SRC .. "/dot_included.json.tmpl")
   eq("non-excluded still seeds target ft", vim.b[yb].chezmoi_target_ft, "json")
   ct.config.inject.exclude = {}
+end
+
+-- the inject-chezmoi! directive itself: it is what injects, so it has to honor
+-- inject.enabled and inject.exclude (an unseeded buffer takes its name fallback),
+-- refuse gotmpl as a target (a template injecting itself recurses), and skip a
+-- language whose parser is missing
+do
+  local handler
+  local real_add = vim.treesitter.query.add_directive
+  vim.treesitter.query.add_directive = function(name, fn, opts)
+    if name == "inject-chezmoi!" then
+      handler = fn
+    end
+    return real_add(name, fn, opts)
+  end
+  require("chezmoi-template.inject").register_directive()
+  vim.treesitter.query.add_directive = real_add
+
+  local function injected(name, lang)
+    local b = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_name(b, name)
+    vim.b[b].chezmoi_target_lang = lang
+    local md = {}
+    handler(nil, nil, b, nil, md)
+    vim.api.nvim_buf_delete(b, { force = true })
+    return md["injection.language"]
+  end
+
+  eq("directive injects the seeded language", injected("/x/seeded_a.tmpl", "lua"), "lua")
+  eq("directive falls back to the buffer name", injected("/x/dot_fallback.lua.tmpl"), "lua")
+  eq("directive skips a missing parser", injected("/x/seeded_b.tmpl", "no_such_lang_xyz"), nil)
+  eq("directive refuses a gotmpl target", injected("/x/literal_demo.tmpl"), nil)
+  ct.config.inject.exclude = { "skip_inject" }
+  eq("directive honors inject.exclude", injected("/x/skip_inject.lua.tmpl"), nil)
+  ct.config.inject.exclude = {}
+  ct.config.inject.enabled = false
+  eq("directive honors inject.enabled", injected("/x/disabled.lua.tmpl", "lua"), nil)
+  ct.config.inject.enabled = true
+
+  eq("has_parser true for a bundled parser", resolve.has_parser("lua"), true)
+  eq("has_parser false for a missing parser", resolve.has_parser("no_such_lang_xyz"), false)
 end
 
 -- _register wires encryption up front rather than leaving it to _activate: an

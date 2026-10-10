@@ -123,14 +123,24 @@ end
 -- inject-chezmoi! injects the target language into nameless scratch buffers.
 -- Clears stale vars first (snacks/telescope reuse preview buffers across
 -- entries); if the backend already started treesitter, restart to re-run
--- injection with the vars in place.
+-- injection with the vars in place. Only templates restart as gotmpl; a plain
+-- managed file keeps the language the backend chose.
 local function seed_preview(buf, abs)
   vim.b[buf].chezmoi_target_ft = nil
   vim.b[buf].chezmoi_target_lang = nil
   require("chezmoi-template.inject").seed_buffer(buf, abs)
-  if vim.treesitter.highlighter.active[buf] then
+  local hl = vim.treesitter.highlighter.active[buf]
+  if hl then
+    local nabs = vim.fs.normalize(abs)
+    local name = vim.fs.basename(nabs)
+    local template = nabs:match("%.tmpl")
+      or nabs:find("/.chezmoitemplates/", 1, true)
+      or name:match("^%.chezmoiignore")
+      or name:match("^%.chezmoiremove")
+      or name:match("^%.chezmoiexternal")
+    local lang = template and "gotmpl" or hl.tree:lang()
     vim.treesitter.stop(buf)
-    pcall(vim.treesitter.start, buf, "gotmpl")
+    pcall(vim.treesitter.start, buf, lang)
   end
 end
 M._seed_preview = seed_preview
