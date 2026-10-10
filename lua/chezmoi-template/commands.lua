@@ -40,6 +40,10 @@ end
 
 -- chezmoi apply, whole state or a single target (async)
 local function apply(target)
+  -- vim.system throws on a missing executable; report it like any failure
+  if not resolve.has_chezmoi() then
+    return notify("apply failed: chezmoi executable not found", vim.log.levels.ERROR)
+  end
   local args = { "apply" }
   if require("chezmoi-template").config.apply.force then
     table.insert(args, "--force")

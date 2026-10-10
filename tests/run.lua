@@ -1175,6 +1175,20 @@ do
   fake["execute-template"] = { code = 0, stdout = "rendered ok\n" }
 end
 
+-- :Chezmoi! apply with no chezmoi on PATH reports it instead of throwing from
+-- the spawn
+do
+  local real_has = resolve.has_chezmoi
+  resolve.has_chezmoi = function()
+    return false
+  end
+  clear_notes()
+  local ok = pcall(vim.cmd, "Chezmoi! apply")
+  resolve.has_chezmoi = real_has
+  eq("apply without chezmoi does not throw", ok, true)
+  eq("apply without chezmoi is reported", has_note("chezmoi executable not found"), true)
+end
+
 -- gf follows a {{ template "name" }} argument into .chezmoitemplates/, and the
 -- opt-in buffer-local keymaps ride the same managed-buffer autocmd
 do
